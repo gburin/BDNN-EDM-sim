@@ -17,6 +17,7 @@ os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
+os.environ["DJANGO_SETTINGS_MODULE"] = "nexus"
 from numpy import linalg as la
 import numpy as np
 import pandas as pd
@@ -85,6 +86,7 @@ class bdnn_simulator():
                  # effects can be fixed with e.g. np.array([[2.3., 2.3.],[1.5.,1.5.]]) and cat_traits_effect_decr_incr = np.array([[True, True],[False, False]])
                  # effect of n_cat_traits_states > 2 can be fixed with n_cat_traits_states = [3, 3] AND np.array([[1.5., 2.3.],[0.2.,1.5.]]) (no need for cat_traits_effect_decr_incr)
                  # or in case of 4 states with n_cat_traits_states = [4, 4] AND np.array([[1.5., 2.3., 0.6],[0.2.,1.5., 1.9]])
+                 cat_traits_evolve = False,
                  cat_traits_effect = np.array([[1., 1.],
                                                [1., 1.]]),
                  cat_traits_effect_decr_incr = np.array([[True, False],
@@ -102,6 +104,12 @@ class bdnn_simulator():
                  # state0 no environmental effect, state1 1 * sp_env_eff, state2 -0.5 * sp_env_eff
                  # No modification of environmental effect on extinction
                  env_effect_cat_trait = [None, None],
+                 env_sim = False,
+                 env_sim_model = "white",
+                 env_sim_mean = 0,
+                 env_sim_sd = 1,
+                 env_sim_trend_slope = 0.001,
+                 env_sim_shift = [100, 200],
                  K_lam = None, # carrying capacity K
                  K_mu = None, # carrying capacity K
                  # fix carrying capacity K through time
@@ -156,6 +164,7 @@ class bdnn_simulator():
         self.cat_traits_ordinal = cat_traits_ordinal
         self.cat_traits_dir = cat_traits_dir
         self.cat_traits_diag = cat_traits_diag
+        self.cat_traits_evolve = cat_traits_evolve
         self.cat_traits_effect = cat_traits_effect
         self.cat_traits_effect_decr_incr = cat_traits_effect_decr_incr
         self.cat_traits_min_freq = cat_traits_min_freq
@@ -167,6 +176,12 @@ class bdnn_simulator():
         self.ex_env_file = ex_env_file
         self.ex_env_eff = ex_env_eff
         self.env_effect_cat_trait = env_effect_cat_trait
+        self.env_sim = env_sim
+        self.env_sim_model = env_sim_model
+        self.env_sim_mean = env_sim_mean
+        self.env_sim_sd = env_sim_sd
+        self.env_sim_trend_slope = env_sim_trend_slope
+        self.env_sim_shift = env_sim_shift
         self.K_lam = K_lam,
         self.K_mu = K_mu,
         self.fixed_K_lam = fixed_K_lam,
@@ -203,28 +218,51 @@ class bdnn_simulator():
         # Track if lineage is a victim of mass extinction
         lineage_victim_mass_extinction = []
 
-        for i in range(self.s_species):
-            ts.append(root)
-            te.append(-0.0)
-            anc_desc.append(str(i))
+        # init newick string (not working with > 1 self.s_species)
+        nwk_str = 'No newick string with more than one starting species'
+        # if self.s_species >= 1:
+        nwk.append('T0:%s' % self.format_age_for_newick(0.0))
+        nwk_str = nwk[0] + ';'
+
+        # for i in range(self.s_species):
+        ts.append(root)
+        te.append(-0.0)
+        anc_desc.append(str(0))
+        lineage_rates_tmp = np.zeros(5 + 3 * n_cont_traits + 2 * n_cat_traits)
+        lineage_rates_tmp[:] = np.nan
+        lineage_rates_tmp[:5] = np.array([root, -0.0, L[root], M[root], 0.0])
+        lineage_rates.append(lineage_rates_tmp)
+        lineage_victim_mass_extinction.append(0)
+
+
+        # adding other initial species to the newick file
+        for sl in range(1, self.s_species):
+            # num_sp_events_at_t += 1
+            te.append(0.0)  # add species
+            ts.append(root)  # sp time
+            anc_desc.append(str(len(ts) - 1) + '_' + str(sl))
             lineage_rates_tmp = np.zeros(5 + 3 * n_cont_traits + 2 * n_cat_traits)
             lineage_rates_tmp[:] = np.nan
             lineage_rates_tmp[:5] = np.array([root, -0.0, L[root], M[root], 0.0])
             lineage_rates.append(lineage_rates_tmp)
             lineage_victim_mass_extinction.append(0)
+            # lineage_rates_tmp = np.zeros(5 + 3 * n_cont_traits + 2 * n_cat_traits)
+            # l_new = l + 0.0
+            # m_new = m + 0.0
 
-        # init newick string (not working with > 1 self.s_species)
-        nwk_str = 'No newick string with more than one starting species'
-        if self.s_species == 1:
-            nwk.append('T0:%s' % self.format_age_for_newick(0.0))
-            nwk_str = nwk[0] + ';'
+            # modify nwk list
+            #if self.s_species == 1:
+            nwk_sl_before = nwk_str[sl]
+            nwk_str = self.update_nwk(nwk_sl_before, anagenetic=False)
+            nwk.append('T' + str(len(ts) - 1) + ':' + self.format_age_for_newick(0.0))
+            nwk_str = self.add_speciation_to_nwk_str(nwk_str, nwk_sl_before, str(len(ts) - 1))
 
             # init continuous traits (if there are any to simulate)
         root_plus_1 = np.abs(root) + 2
 
         # init categorical traits
         cat_traits = np.empty((root_plus_1, n_cat_traits, self.s_species))
-        cat_traits[:] = np.nan
+        cat_traits[:] = range(self.s_species) ## np.nan
         # init continuous traits
         cont_traits = np.empty((root_plus_1, n_cont_traits, self.s_species))
         cont_traits[:] = np.nan
@@ -232,37 +270,6 @@ class bdnn_simulator():
         lineage_rates_through_time = np.empty((root_plus_1, 2, self.s_species))
         lineage_rates_through_time[:] = np.nan
 
-        for i in range(self.s_species):
-            cat_trait_yi = 0
-            if n_cat_traits > 0:
-                for y in range(n_cat_traits):
-                    if self.cat_traits_diag is None:
-                        cat_traits_Q[y] = dT * cat_traits_Q[y] * 0.01  # Only for anagenetic evolution of categorical traits
-                    pi = self.get_stationary_distribution(cat_traits_Q[y])
-                    cat_trait_yi = int(np.random.choice(cat_states[y], 1, p = pi))
-                    cat_traits[-1, y, i] = cat_trait_yi
-                    lineage_rates[i][2] = lineage_rates[i][2] * cat_trait_effect[y][0, cat_trait_yi]
-                    lineage_rates[i][3] = lineage_rates[i][3] * cat_trait_effect[y][1, cat_trait_yi]
-                    lineage_rates[i][(5 + 3 * n_cont_traits + y):(6 + 3 * n_cont_traits + y)] = cat_trait_yi
-                    # lineage_rates[i][2] = L[root] * cat_trait_effect[y][0, int(cat_trait_yi)]
-                    # lineage_rates[i][3] = M[root] * cat_trait_effect[y][1, int(cat_trait_yi)]
-            if n_cont_traits > 0:
-                Theta0 = np.zeros(n_cont_traits)
-                cont_traits_i = self.evolve_cont_traits(Theta0, n_cont_traits, cont_traits_alpha, cont_traits_Theta1, cont_traits_varcov) # from past to present
-                cont_traits[-1, :, i] = cont_traits_i
-                lineage_rates[i][5:(5 + n_cont_traits)] = cont_traits_i
-                # print('lineage_rates[i]: ', lineage_rates[i])
-                # print('current state: ', lineage_rates[i][5 + n_cont_traits])
-                lineage_rates[i][2] = self.get_rate_by_cont_trait_transformation(lineage_rates[i][2],
-                                                                                 cont_traits_i,
-                                                                                 cont_trait_effect_sp[0, :, cat_trait_yi, :],
-                                                                                 expected_sd_cont_traits,
-                                                                                 n_cont_traits)
-                lineage_rates[i][3] = self.get_rate_by_cont_trait_transformation(lineage_rates[i][3],
-                                                                                 cont_traits_i,
-                                                                                 cont_trait_effect_ex[0, :, cat_trait_yi, :],
-                                                                                 expected_sd_cont_traits,
-                                                                                 n_cont_traits)
 
         # init biogeography
         biogeo = np.empty((root_plus_1, 1, self.s_species))
@@ -283,6 +290,8 @@ class bdnn_simulator():
 
         me_prob = self.mass_extinction_prob / self.scale
         me_times = self.mass_extinction_times * self.scale
+
+        species_trait_list = list(np.arange(self.s_species))
 
         # evolution (from the past to the present)
         exceeded_diversity = False
@@ -336,7 +345,7 @@ class bdnn_simulator():
                 l_j = l + 0.
                 m_j = m + 0.
 
-                # environmental effect
+                # environmental effect - external file
                 if self.sp_env_file is not None:
                     eff_sp = env_eff_sp
                     cat_trait_j = 0
@@ -360,11 +369,11 @@ class bdnn_simulator():
                 cat_trait_j = 0
                 if n_cat_traits > 0:
                     for y in range(n_cat_traits):
-                        if self.cat_traits_diag is None:
+                        if self.cat_traits_diag is not None or self.cat_traits_evolve is False:
+                            cat_trait_j = cat_traits[t_abs + 1, y, j]  # No change along branches
+                        else:
                             cat_trait_j = self.evolve_cat_traits_ana(cat_traits_Q[y], cat_traits[t_abs + 1, y, j],
                                                                      ran_vec_cat_trait[j, y], cat_states[y])
-                        else:
-                            cat_trait_j = cat_traits[t_abs + 1, y, j]  # No change along branches
                         cat_trait_j = int(cat_trait_j)
                         cat_traits[t_abs, y, j] = cat_trait_j
                         l_j = l_j * cat_trait_effect[y][0, cat_trait_j]
@@ -416,10 +425,13 @@ class bdnn_simulator():
 
                     # Inherit traits
                     cat_trait_new = 0
+                    species_trait_list.append(species_trait_list[j])
                     if n_cat_traits > 0:
                         cat_traits_new_species = self.empty_traits(root_plus_1, n_cat_traits)
-                        if self.cat_traits_diag is None:
+                        if self.cat_traits_diag is None or self.cat_traits_evolve is False:
                             cat_traits_new_species[t_abs, :] = cat_traits[t_abs, :, j] # inherit state at speciation
+                            # print(j, cat_traits[t_abs, :, j], cat_traits[t_abs])
+
                         else:
                             for y in range(n_cat_traits):
                                 # Change of categorical trait at speciation
@@ -465,6 +477,8 @@ class bdnn_simulator():
                                 cat_trait_j = cat_trait_new
                             l_new = self.get_rate_by_env_transformation(l_new, t_abs, eff_sp, rate_type = 'l',
                                                                         cate_state = cat_trait_j)
+                            print(l_new)
+                            print(crap)
                         if self.ex_env_file is not None:
                             eff_ex = env_eff_ex
                             cat_trait_j = 0
@@ -544,7 +558,7 @@ class bdnn_simulator():
         lineage_rates[:, 3] = lineage_rates[:, 3] * self.scale
         lineage_rates[:, 4] = lineage_rates[:, 4] * self.scale
 
-        return -np.array(ts) / self.scale, -np.array(te) / self.scale, anc_desc, cont_traits, cat_traits, mass_ext_time, mass_ext_mag, np.array(lineage_victim_mass_extinction), lineage_weighted_lambda_tt, lineage_weighted_mu_tt, lineage_rates, biogeo, areas_comb, lineage_rates_through_time, nwk_str, exceeded_diversity
+        return -np.array(ts) / self.scale, -np.array(te) / self.scale, anc_desc, cont_traits, cat_traits, mass_ext_time, mass_ext_mag, np.array(lineage_victim_mass_extinction), lineage_weighted_lambda_tt, lineage_weighted_mu_tt, lineage_rates, biogeo, areas_comb, lineage_rates_through_time, nwk_str, exceeded_diversity, species_trait_list
 
 
     def get_random_settings(self, root, sp_env_ts, ex_env_ts, verbose):
@@ -1398,6 +1412,9 @@ class bdnn_simulator():
         sp_env_ts = None
         if self.sp_env_file is not None:
             sp_env_ts = np.loadtxt(self.sp_env_file, skiprows=1)
+        if self.env_sim is not False:
+            envir_df = EnvironmentSimulator(root = self.root_r, scale = self.scale, model = self.env_sim_model, mean = self.env_sim_mean, sd = self.env_sim_sd, slope = self.env_sim_trend_slope, shift = self.env_sim_shift)
+            sp_env_ts = envir_df.simulate_env()
         ex_env_ts = None
         if self.ex_env_file is not None:
             ex_env_ts = np.loadtxt(self.ex_env_file, skiprows=1)
@@ -1417,7 +1434,7 @@ class bdnn_simulator():
             self.nwk_decimal_digits = len(str(int(self.scale)))
             self.nwk_digits = self.nwk_leading_digits + self.nwk_decimal_digits + 1
 
-            FAtrue, LOtrue, anc_desc, cont_traits, cat_traits, mass_ext_time, mass_ext_mag, mass_ext_victim, lineage_weighted_lambda_tt, lineage_weighted_mu_tt, lineage_rates, biogeo, areas_comb, lineage_rates_through_time, nwk_str, exceeded_diversity = self.simulate(L_tt, M_tt, root, dT, n_cont_traits, cont_traits_varcov, cont_traits_Theta1, cont_traits_alpha, cont_traits_varcov_clado, cont_traits_effect_sp, cont_traits_effect_ex, expected_sd_cont_traits, cont_traits_effect_shift_sp, cont_traits_effect_shift_ex, n_cat_traits, cat_states, cat_traits_Q, cat_traits_effect, n_areas, dispersal, extirpation, env_eff_sp, env_eff_ex)
+            FAtrue, LOtrue, anc_desc, cont_traits, cat_traits, mass_ext_time, mass_ext_mag, mass_ext_victim, lineage_weighted_lambda_tt, lineage_weighted_mu_tt, lineage_rates, biogeo, areas_comb, lineage_rates_through_time, nwk_str, exceeded_diversity, species_trait_list = self.simulate(L_tt, M_tt, root, dT, n_cont_traits, cont_traits_varcov, cont_traits_Theta1, cont_traits_alpha, cont_traits_varcov_clado, cont_traits_effect_sp, cont_traits_effect_ex, expected_sd_cont_traits, cont_traits_effect_shift_sp, cont_traits_effect_shift_ex, n_cat_traits, cat_states, cat_traits_Q, cat_traits_effect, n_areas, dispersal, extirpation, env_eff_sp, env_eff_ex)
             #print('exceeded_diversity', exceeded_diversity)
             prop_cat_traits_ok = self.check_proportion_cat_traits(n_cat_traits, cat_traits)
 
@@ -1486,7 +1503,8 @@ class bdnn_simulator():
                   'tree': tree,
                   'tree_offset': tree_offset,
                   'LTTtrue': LTTtrue,
-                  'sim_scale': self.scale}
+                  'sim_scale': self.scale,
+                  'species_trait_list': species_trait_list}
         if self.sp_env_file is not None:
             res_bd['env_sp'] = sp_env_ts
         if self.ex_env_file is not None:
@@ -4942,3 +4960,135 @@ class write_FBD_tree():
                                          infer_mass_extinctions = infer_mass_extinctions)
         self.write_occurrence(name = name, edges = edges)
 
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+
+class EnvironmentSimulator:
+    """
+    Python translation of the R function `envir.sim`.
+    """
+
+    def __init__(
+        self,
+        root,
+        scale,
+        mean=0.0,
+        sd=1.0,
+        model="white",
+        slope=None,
+        shift=None,
+        random_state=None,
+    ):
+        self.root = root
+        self.scale = scale
+        self.mean = mean
+        self.sd = sd
+        self.model = model
+        self.slope = slope
+        self.shift = set(shift) if shift is not None else set()
+
+        # RNG
+        if isinstance(random_state, np.random.Generator):
+            self.rng = random_state
+        else:
+            self.rng = np.random.default_rng(random_state)
+
+        self._last_simulation = None  # store most recent result
+
+    def simulate_env(self):
+        """Run the simulation and return a pandas DataFrame."""
+        length = int(self.root * self.scale)
+        if length <= 0:
+            raise ValueError("root * scale must be positive.")
+
+        time_vec = np.linspace(-self.root, 0, num=length)
+        envir = np.empty(length, dtype=float)
+
+        # First value
+        envir[0] = self.rng.normal(loc=self.mean, scale=self.sd)
+
+        # Model selection
+        if self.model == "white":
+            self._simulate_white(envir)
+        elif self.model == "BM":
+            self._simulate_bm(envir)
+        elif self.model == "trend":
+            if self.slope is None:
+                raise ValueError("slope must be provided for model='trend'.")
+            self._simulate_trend(envir, time_vec)
+        elif self.model == "bmean":
+            self._simulate_bmean(envir)
+        elif self.model == "shift":
+            self._simulate_shift(envir)
+        else:
+            raise ValueError("Unknown model '{}'".format(self.model))
+
+        df = pd.DataFrame({"time": time_vec, "envir": envir})
+        self._last_simulation = df
+        return df
+
+    # --- Plot method ---
+
+    def plot(self, df=None, figsize=(8, 4), **kwargs):
+        """
+        Plot the time series from the simulation.
+
+        Parameters
+        ----------
+        df : pandas.DataFrame, optional
+            DataFrame returned by simulate(). If None, uses the last simulation.
+        figsize : tuple, default (8, 4)
+            Size of the plot.
+        **kwargs :
+            Additional keyword arguments passed to plt.plot(), e.g.:
+            color="red", linestyle="--", linewidth=2, etc.
+        """
+        if df is None:
+            if self._last_simulation is None:
+                df = self.simulate()
+            else:
+                df = self._last_simulation
+
+        plt.figure(figsize=figsize)
+        plt.plot(df["time"], df["envir"], **kwargs)
+        plt.xlabel("Time")
+        plt.ylabel("Environment Value")
+        plt.title(f"Environmental Simulation ({self.model})")
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.show()
+
+    # --- Private simulation subroutines ---
+
+    def _simulate_white(self, envir):
+        for i in range(1, len(envir)):
+            envir[i] = self.rng.normal(self.mean, self.sd)
+
+    def _simulate_bm(self, envir):
+        for i in range(1, len(envir)):
+            step = self.rng.normal(self.mean, self.sd)
+            envir[i] = envir[i - 1] + step
+
+    def _simulate_trend(self, envir, time_vec):
+        for i in range(1, len(envir)):
+            trend_mean = self.mean + self.slope * -time_vec[i - 1]
+            step = self.rng.normal(trend_mean, 0.1 * self.sd)
+            envir[i] = envir[i - 1] + step
+
+    def _simulate_bmean(self, envir):
+        for i in range(1, len(envir)):
+            inner_mean = self.rng.normal(self.mean, 0.1 * self.sd)
+            step = self.rng.normal(inner_mean, 1.0)
+            envir[i] = envir[i - 1] + step
+
+    def _simulate_shift(self, envir):
+        for i in range(1, len(envir)):
+            step = self.rng.normal(self.mean, self.sd)
+            envir[i] = envir[i - 1] + step
+
+            # R-like 1-based indexing
+            if (i + 1) in self.shift:
+                jump = self.rng.normal(0.0, 10 * self.sd)
+                envir[i] += jump
