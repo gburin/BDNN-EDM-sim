@@ -27,6 +27,7 @@ import string
 import dendropy
 import nexus # pip3 install python-nexus
 import warnings
+import matplotlib.pyplot as plt
 # np.set_printoptions(suppress = True, precision = 3)
 np.set_printoptions(threshold = sys.maxsize)
 from collections.abc import Iterable
@@ -95,21 +96,39 @@ class bdnn_simulator():
                  n_areas = [0, 0], # number of biogeographic areas (minimum of 2)
                  dispersal = [0.1, 0.3], # range for the rate of area expansion
                  extirpation = [0.05, 0.1], # range for the rate of area loss
-                 sp_env_file = None, # Path to environmental file influencing speciation
-                 sp_env_eff = [0.00001, 0.00001],  # range environmental effect on speciation rate
-                 ex_env_file = None,  # Path to environmental file influencing speciation
-                 ex_env_eff = [0.00001, 0.00001],  # range environmental effect on speciation rate
-                 # List with multiplier for the states of the first categorical traits for environmental effect
-                 # e.g. for three states [[0.0, 1.0, -0.5], [None]]
-                 # state0 no environmental effect, state1 1 * sp_env_eff, state2 -0.5 * sp_env_eff
-                 # No modification of environmental effect on extinction
-                 env_effect_cat_trait = [None, None],
+                 sp_env_file=None,
+                 sp_env_eff=[0.00001, 0.00001],
+                 ex_env_file=None,
+                 ex_env_eff=[0.00001, 0.00001],
+                 # diversity dependence by categorical trait state
+                 divdep_by_state=False,
+                 divdep_target_trait_idx=0,
+                 divdep_sp_mode=None,  # None, "linear", "exponential", "logistic"
+                 divdep_ex_mode=None,  # None, "linear", "exponential", "logistic"
+                 divdep_sp_eff=[0.0, 0.0],
+                 divdep_ex_eff=[0.0, 0.0],
+                 divdep_effect_by_state_sp=None,
+                 divdep_effect_by_state_ex=None,
+                 # rows = focal lineage state, cols = source state whose diversity is counted
+                 # if None, defaults to own-state only
+                 divdep_state_matrix_sp=None,
+                 divdep_state_matrix_ex=None,
+                 divdep_normalize=True,
+                 divdep_scale_reference="total_extant",  # "total_extant", "max_state", "none"
+                 # Per-state multipliers for the environmental effect, using the first categorical trait
+                 # These are LOOKUP values only: the numeric state labels themselves carry no meaning.
+                 # Example for 3 states:
+                 # env_effect_by_state_sp = [0.0, 1.0, -0.5]
+                 # env_effect_by_state_ex = [0.0, 0.5, 2.0]
+                 env_effect_by_state_sp=None,
+                 env_effect_by_state_ex=None,
                  env_sim = False,
                  env_sim_model = "white",
                  env_sim_mean = 0,
                  env_sim_sd = 1,
                  env_sim_trend_slope = 0.001,
                  env_sim_shift = [100, 200],
+                 env_sim_shift_mag = 10,
                  K_lam = None, # carrying capacity K
                  K_mu = None, # carrying capacity K
                  # fix carrying capacity K through time
@@ -175,7 +194,20 @@ class bdnn_simulator():
         self.sp_env_eff = sp_env_eff
         self.ex_env_file = ex_env_file
         self.ex_env_eff = ex_env_eff
-        self.env_effect_cat_trait = env_effect_cat_trait
+        self.env_effect_by_state_sp = env_effect_by_state_sp
+        self.env_effect_by_state_ex = env_effect_by_state_ex
+        self.divdep_by_state = divdep_by_state
+        self.divdep_target_trait_idx = divdep_target_trait_idx
+        self.divdep_sp_mode = divdep_sp_mode
+        self.divdep_ex_mode = divdep_ex_mode
+        self.divdep_sp_eff = divdep_sp_eff
+        self.divdep_ex_eff = divdep_ex_eff
+        self.divdep_effect_by_state_sp = divdep_effect_by_state_sp
+        self.divdep_effect_by_state_ex = divdep_effect_by_state_ex
+        self.divdep_state_matrix_sp = divdep_state_matrix_sp
+        self.divdep_state_matrix_ex = divdep_state_matrix_ex
+        self.divdep_normalize = divdep_normalize
+        self.divdep_scale_reference = divdep_scale_reference
         self.env_sim = env_sim
         self.env_sim_model = env_sim_model
         self.env_sim_mean = env_sim_mean
@@ -201,7 +233,8 @@ class bdnn_simulator():
                  cont_trait_effect_sp, cont_trait_effect_ex, expected_sd_cont_traits,
                  cont_traits_effect_shift_sp, cont_traits_effect_shift_ex,
                  n_cat_traits, cat_states, cat_traits_Q, cat_trait_effect,
-                 n_areas, dispersal, extirpation, env_eff_sp, env_eff_ex):
+                 n_areas, dispersal, extirpation, env_eff_sp, env_eff_ex,
+                 divdep_eff_sp, divdep_eff_ex):
         ts = list()
         te = list()
         nwk = list()
@@ -262,13 +295,32 @@ class bdnn_simulator():
 
         # init categorical traits
         cat_traits = np.empty((root_plus_1, n_cat_traits, self.s_species))
-        cat_traits[:] = range(self.s_species) ## np.nan
+        cat_traits[:] = range(self.s_species)
+
         # init continuous traits
         cont_traits = np.empty((root_plus_1, n_cont_traits, self.s_species))
         cont_traits[:] = np.nan
-        # init lineage-specific rates through time
-        lineage_rates_through_time = np.empty((root_plus_1, 2, self.s_species))
+
+        # lineage rate history columns:
+        # 0 = lambda_final
+        # 1 = mu_final
+        # 2 = lambda_env_multiplier
+        # 3 = mu_env_multiplier
+        # 4 = cat_state
+        # 5 = env_sp_value
+        # 6 = env_ex_value
+        # 7 = lambda_div_multiplier
+        # 8 = mu_div_multiplier
+        # 9 = div_signal_sp
+        # 10 = div_signal_ex
+        lineage_rates_through_time = np.empty((root_plus_1, 11, self.s_species))
         lineage_rates_through_time[:] = np.nan
+
+        # state diversity through time for the target categorical trait
+        state_diversity_through_time = None
+        if n_cat_traits > 0:
+            n_states_div_max = len(cat_states[self.divdep_target_trait_idx])
+            state_diversity_through_time = np.full((root_plus_1, n_states_div_max), np.nan)
 
 
         # init biogeography
@@ -341,60 +393,158 @@ class bdnn_simulator():
 
             num_sp_events_at_t = 0
 
-            for j in te_extant:  # extant lineages
-                l_j = l + 0.
-                m_j = m + 0.
+            # PASS 1: update categorical states for all extant lineages at this time slice
+            if n_cat_traits > 0:
+                for j in te_extant:
+                    for y in range(n_cat_traits):
+                        if self.cat_traits_diag is not None or self.cat_traits_evolve is False:
+                            cat_trait_j = cat_traits[t_abs + 1, y, j]
+                        else:
+                            cat_trait_j = self.evolve_cat_traits_ana(
+                                cat_traits_Q[y],
+                                cat_traits[t_abs + 1, y, j],
+                                ran_vec_cat_trait[j, y],
+                                cat_states[y]
+                            )
+                        cat_traits[t_abs, y, j] = int(cat_trait_j)
 
-                # environmental effect - external file
-                if self.sp_env_file is not None:
-                    eff_sp = env_eff_sp
-                    cat_trait_j = 0
-                    if n_cat_traits > 0 and self.env_effect_cat_trait[0] is not None:
-                        cat_trait_j = int(cat_traits[t_abs + 1, 0, j])
-                    #     eff_sp = eff_sp * self.env_effect_cat_trait[0][cat_trait_j]
-                    # eff_sp = np.exp(eff_sp * env_sp[t_abs])
-                    # l_j = float(l_j * eff_sp)
-                    l_j = self.get_rate_by_env_transformation(l_j, t_abs, eff_sp, rate_type = 'l', cate_state = cat_trait_j)
-                if self.ex_env_file is not None:
-                    eff_ex = env_eff_ex
-                    cat_trait_j = 0
-                    if n_cat_traits > 0 and self.env_effect_cat_trait[1] is not None:
-                        cat_trait_j = int(cat_traits[t_abs + 1, 0, j])
-                    #     eff_ex = env_eff_ex * self.env_effect_cat_trait[1][cat_trait_j]
-                    # eff_ex = np.exp(eff_ex * env_ex[t_abs])
-                    # m_j = float(m_j * eff_ex)
-                    m_j = self.get_rate_by_env_transformation(m_j, t_abs, eff_ex, rate_type = 'm', cate_state = cat_trait_j)
+            # state diversity snapshot for the chosen categorical trait
+            state_counts = None
+            if self.divdep_by_state and n_cat_traits > 0:
+                trait_idx_div = self.divdep_target_trait_idx
+                n_states_div = len(cat_states[trait_idx_div])
+                state_labels_t = cat_traits[t_abs, trait_idx_div, :]
+                state_counts = self.get_state_diversity(state_labels_t, te_extant, n_states_div)
+                state_diversity_through_time[t_abs, :n_states_div] = state_counts
 
-                # categorical trait evolution
+            # PASS 2: compute rates and events
+            for j in te_extant:
+                l_j = l + 0.0
+                m_j = m + 0.0
+
+                # current categorical state of focal lineage for the target trait
+                focal_state = 0
+                if n_cat_traits > 0:
+                    focal_state = int(cat_traits[t_abs, self.divdep_target_trait_idx, j])
+
+                # environment bookkeeping
+                env_mult_l_j = 1.0
+                env_mult_m_j = 1.0
+                env_sp_value = np.nan
+                env_ex_value = np.nan
+
+                # diversity bookkeeping
+                div_mult_l_j = 1.0
+                div_mult_m_j = 1.0
+                div_signal_sp = np.nan
+                div_signal_ex = np.nan
+
+                # environment effects
+                if self.sp_env_file is not None or self.env_sim is True:
+                    eff_sp_j = self.get_env_effect_by_state(
+                        env_eff_sp,
+                        focal_state,
+                        self.env_effect_by_state_sp
+                    )
+                    l_j, env_mult_l_j = self.get_rate_by_env_transformation(
+                        l_j, t_abs, eff_sp_j, rate_type='l'
+                    )
+                    env_sp_idx = min(int(t_abs), len(self._env_sp_binned) - 1)
+                    env_sp_value = self._env_sp_binned[env_sp_idx]
+
+                if self.ex_env_file is not None or self.env_sim is True:
+                    eff_ex_j = self.get_env_effect_by_state(
+                        env_eff_ex,
+                        focal_state,
+                        self.env_effect_by_state_ex
+                    )
+                    m_j, env_mult_m_j = self.get_rate_by_env_transformation(
+                        m_j, t_abs, eff_ex_j, rate_type='m'
+                    )
+                    env_ex_idx = min(int(t_abs), len(self._env_ex_binned) - 1)
+                    env_ex_value = self._env_ex_binned[env_ex_idx]
+
+                # categorical trait multipliers
                 cat_trait_j = 0
                 if n_cat_traits > 0:
                     for y in range(n_cat_traits):
-                        if self.cat_traits_diag is not None or self.cat_traits_evolve is False:
-                            cat_trait_j = cat_traits[t_abs + 1, y, j]  # No change along branches
-                        else:
-                            cat_trait_j = self.evolve_cat_traits_ana(cat_traits_Q[y], cat_traits[t_abs + 1, y, j],
-                                                                     ran_vec_cat_trait[j, y], cat_states[y])
-                        cat_trait_j = int(cat_trait_j)
-                        cat_traits[t_abs, y, j] = cat_trait_j
+                        cat_trait_j = int(cat_traits[t_abs, y, j])
                         l_j = l_j * cat_trait_effect[y][0, cat_trait_j]
                         m_j = m_j * cat_trait_effect[y][1, cat_trait_j]
 
-                # continuous trait evolution
+                # continuous trait evolution/effects
                 if n_cont_traits > 0:
-                    cont_trait_j = self.evolve_cont_traits(cont_traits[t_abs + 1, :, j], n_cont_traits, cont_traits_alpha, cont_traits_Theta1, cont_traits_varcov)
+                    cont_trait_j = self.evolve_cont_traits(
+                        cont_traits[t_abs + 1, :, j],
+                        n_cont_traits,
+                        cont_traits_alpha,
+                        cont_traits_Theta1,
+                        cont_traits_varcov
+                    )
                     cont_traits[t_abs, :, j] = cont_trait_j
+
                     cont_traits_bin = cont_traits_effect_shift_sp[t_abs]
-                    l_j = self.get_rate_by_cont_trait_transformation(l_j,
-                                                                     cont_trait_j,
-                                                                     cont_trait_effect_sp[cont_traits_bin, :, cat_trait_j, :],
-                                                                     expected_sd_cont_traits,
-                                                                     n_cont_traits)
+                    l_j = self.get_rate_by_cont_trait_transformation(
+                        l_j,
+                        cont_trait_j,
+                        cont_trait_effect_sp[cont_traits_bin, :, cat_trait_j, :],
+                        expected_sd_cont_traits,
+                        n_cont_traits
+                    )
+
                     cont_traits_bin = cont_traits_effect_shift_ex[t_abs]
-                    m_j = self.get_rate_by_cont_trait_transformation(m_j,
-                                                                     cont_trait_j,
-                                                                     cont_trait_effect_ex[cont_traits_bin, :, cat_trait_j, :],
-                                                                     expected_sd_cont_traits,
-                                                                     n_cont_traits)
+                    m_j = self.get_rate_by_cont_trait_transformation(
+                        m_j,
+                        cont_trait_j,
+                        cont_trait_effect_ex[cont_traits_bin, :, cat_trait_j, :],
+                        expected_sd_cont_traits,
+                        n_cont_traits
+                    )
+
+                # diversity-by-state effects (compound with environment)
+                if self.divdep_by_state and n_cat_traits > 0 and state_counts is not None:
+                    focal_state = int(cat_traits[t_abs, self.divdep_target_trait_idx, j])
+                    scale_div = self.get_diversity_scale(state_counts, te_extant)
+
+                    if self.divdep_sp_mode is not None:
+                        div_signal_sp = self.get_diversity_signal_by_state(
+                            focal_state,
+                            state_counts,
+                            self.divdep_state_matrix_sp
+                        )
+                        eff_sp_div = self.get_divdep_effect_by_state(
+                            divdep_eff_sp,
+                            focal_state,
+                            self.divdep_effect_by_state_sp
+                        )
+                        l_j, div_mult_l_j = self.get_rate_by_diversity_transformation(
+                            l_j,
+                            div_signal_sp,
+                            eff_sp_div,
+                            model=self.divdep_sp_mode,
+                            scale_value=scale_div
+                        )
+
+                    if self.divdep_ex_mode is not None:
+                        div_signal_ex = self.get_diversity_signal_by_state(
+                            focal_state,
+                            state_counts,
+                            self.divdep_state_matrix_ex
+                        )
+                        eff_ex_div = self.get_divdep_effect_by_state(
+                            divdep_eff_ex,
+                            focal_state,
+                            self.divdep_effect_by_state_ex
+                        )
+                        m_j, div_mult_m_j = self.get_rate_by_diversity_transformation(
+                            m_j,
+                            div_signal_ex,
+                            eff_ex_div,
+                            model=self.divdep_ex_mode,
+                            scale_value=scale_div
+                        )
+
+                # existing carrying-capacity dependence
                 if self.K_lam[0] is not None or self.fixed_K_lam[0] is not None:
                     l_j = self.get_divdep_lam(l_j, no_extant_lineages, t_abs)
                 if self.K_mu[0] is not None or self.fixed_K_mu[0] is not None:
@@ -446,6 +596,7 @@ class bdnn_simulator():
                                 l_new = l_new * cat_trait_effect[y][0, cat_trait_new]
                                 m_new = m_new * cat_trait_effect[y][1, cat_trait_new]
                         cat_traits = np.dstack((cat_traits, cat_traits_new_species))
+
                     if n_cont_traits > 0:
                         cont_traits_new_species = self.empty_traits(root_plus_1, n_cont_traits)
                         # cont_traits_at_origin = cont_traits[t_abs, :, j]
@@ -469,23 +620,85 @@ class bdnn_simulator():
                                                                            cont_traits_at_origin,
                                                                            cont_trait_effect_ex[cont_traits_bin, :, cat_trait_new, :],
                                                                            expected_sd_cont_traits, n_cont_traits)
-                        # environmental effect
-                        if self.sp_env_file is not None:
-                            eff_sp = env_eff_sp
-                            cat_trait_j = 0
-                            if n_cat_traits > 0 and self.env_effect_cat_trait[0] is not None:
-                                cat_trait_j = cat_trait_new
-                            l_new = self.get_rate_by_env_transformation(l_new, t_abs, eff_sp, rate_type = 'l',
-                                                                        cate_state = cat_trait_j)
-                            print(l_new)
-                            print(crap)
-                        if self.ex_env_file is not None:
-                            eff_ex = env_eff_ex
-                            cat_trait_j = 0
-                            if n_cat_traits > 0 and self.env_effect_cat_trait[1] is not None:
-                                cat_trait_j = cat_trait_new
-                            m_new = self.get_rate_by_env_transformation(m_new, t_abs, eff_ex, rate_type = 'm',
-                                                                        cate_state = cat_trait_j)
+                    # environment + diversity effects for the newly speciated lineage
+                    focal_state_new = 0
+                    if n_cat_traits > 0:
+                        focal_state_new = int(cat_traits_new_species[t_abs, self.divdep_target_trait_idx])
+
+                    env_mult_l_new = 1.0
+                    env_mult_m_new = 1.0
+                    env_sp_value_new = np.nan
+                    env_ex_value_new = np.nan
+
+                    div_mult_l_new = 1.0
+                    div_mult_m_new = 1.0
+                    div_signal_sp_new = np.nan
+                    div_signal_ex_new = np.nan
+
+                    if self.sp_env_file is not None or self.env_sim is True:
+                        eff_sp_new = self.get_env_effect_by_state(
+                            env_eff_sp,
+                            focal_state_new,
+                            self.env_effect_by_state_sp
+                        )
+                        l_new, env_mult_l_new = self.get_rate_by_env_transformation(
+                            l_new, t_abs, eff_sp_new, rate_type='l'
+                        )
+                        env_sp_idx_new = min(int(t_abs), len(self._env_sp_binned) - 1)
+                        env_sp_value_new = self._env_sp_binned[env_sp_idx_new]
+
+                    if self.ex_env_file is not None or self.env_sim is True:
+                        eff_ex_new = self.get_env_effect_by_state(
+                            env_eff_ex,
+                            focal_state_new,
+                            self.env_effect_by_state_ex
+                        )
+                        m_new, env_mult_m_new = self.get_rate_by_env_transformation(
+                            m_new, t_abs, eff_ex_new, rate_type='m'
+                        )
+                        env_ex_idx_new = min(int(t_abs), len(self._env_ex_binned) - 1)
+                        env_ex_value_new = self._env_ex_binned[env_ex_idx_new]
+
+                    if self.divdep_by_state and n_cat_traits > 0 and state_counts is not None:
+                        scale_div_new = self.get_diversity_scale(state_counts, te_extant)
+
+                        if self.divdep_sp_mode is not None:
+                            div_signal_sp_new = self.get_diversity_signal_by_state(
+                                focal_state_new,
+                                state_counts,
+                                self.divdep_state_matrix_sp
+                            )
+                            eff_sp_div_new = self.get_divdep_effect_by_state(
+                                divdep_eff_sp,
+                                focal_state_new,
+                                self.divdep_effect_by_state_sp
+                            )
+                            l_new, div_mult_l_new = self.get_rate_by_diversity_transformation(
+                                l_new,
+                                div_signal_sp_new,
+                                eff_sp_div_new,
+                                model=self.divdep_sp_mode,
+                                scale_value=scale_div_new
+                            )
+
+                        if self.divdep_ex_mode is not None:
+                            div_signal_ex_new = self.get_diversity_signal_by_state(
+                                focal_state_new,
+                                state_counts,
+                                self.divdep_state_matrix_ex
+                            )
+                            eff_ex_div_new = self.get_divdep_effect_by_state(
+                                divdep_eff_ex,
+                                focal_state_new,
+                                self.divdep_effect_by_state_ex
+                            )
+                            m_new, div_mult_m_new = self.get_rate_by_diversity_transformation(
+                                m_new,
+                                div_signal_ex_new,
+                                eff_ex_div_new,
+                                model=self.divdep_ex_mode,
+                                scale_value=scale_div_new
+                            )
                     if n_areas > 1:
                         biogeo_new_species = self.empty_traits(root_plus_1, 1)
                         # biogeo_at_origin = biogeo[t_abs, :, j]
@@ -499,11 +712,22 @@ class bdnn_simulator():
                     lineage_rates.append(lineage_rates_tmp)
                     lineage_victim_mass_extinction.append(0)
                     # add new species to lineage-specific rates through time
-                    lineage_rates_through_time_new_species = self.empty_traits(root_plus_1, 2)
+                    lineage_rates_through_time_new_species = self.empty_traits(root_plus_1, 11)
                     lineage_rates_through_time_new_species[t_abs, 0] = l_new
                     lineage_rates_through_time_new_species[t_abs, 1] = m_new
-                    lineage_rates_through_time = np.dstack((lineage_rates_through_time,
-                                                            lineage_rates_through_time_new_species))
+                    lineage_rates_through_time_new_species[t_abs, 2] = env_mult_l_new
+                    lineage_rates_through_time_new_species[t_abs, 3] = env_mult_m_new
+                    lineage_rates_through_time_new_species[t_abs, 4] = focal_state_new
+                    lineage_rates_through_time_new_species[t_abs, 5] = env_sp_value_new
+                    lineage_rates_through_time_new_species[t_abs, 6] = env_ex_value_new
+                    lineage_rates_through_time_new_species[t_abs, 7] = div_mult_l_new
+                    lineage_rates_through_time_new_species[t_abs, 8] = div_mult_m_new
+                    lineage_rates_through_time_new_species[t_abs, 9] = div_signal_sp_new
+                    lineage_rates_through_time_new_species[t_abs, 10] = div_signal_ex_new
+                    lineage_rates_through_time = np.dstack((
+                        lineage_rates_through_time,
+                        lineage_rates_through_time_new_species
+                    ))
                     # modify nwk list
                     if self.s_species == 1:
                         nwk_j_before = nwk[j]
@@ -543,9 +767,23 @@ class bdnn_simulator():
                         nwk_str = nwk_str_new
                         #print(nwk_str)
 
-                # trace lineage-specific rates through time
+                # trace lineage-specific rates and environment through time
                 lineage_rates_through_time[t_abs, 0, j] = l_j
                 lineage_rates_through_time[t_abs, 1, j] = m_j
+                lineage_rates_through_time[t_abs, 2, j] = env_mult_l_j
+                lineage_rates_through_time[t_abs, 3, j] = env_mult_m_j
+                lineage_rates_through_time[t_abs, 4, j] = focal_state
+                lineage_rates_through_time[t_abs, 5, j] = env_sp_value
+                lineage_rates_through_time[t_abs, 6, j] = env_ex_value
+                lineage_rates_through_time[t_abs, 7, j] = div_mult_l_j
+                lineage_rates_through_time[t_abs, 8, j] = div_mult_m_j
+                lineage_rates_through_time[t_abs, 9, j] = div_signal_sp
+                lineage_rates_through_time[t_abs, 10, j] = div_signal_ex
+                lineage_rates_through_time[t_abs, 2, j] = env_mult_l_j
+                lineage_rates_through_time[t_abs, 3, j] = env_mult_m_j
+                lineage_rates_through_time[t_abs, 4, j] = focal_state
+                lineage_rates_through_time[t_abs, 5, j] = env_sp_value
+                lineage_rates_through_time[t_abs, 6, j] = env_ex_value
 
             if t != -1:
                 lineage_weighted_lambda_tt[t_abs-1] = self.get_harmonic_mean(lineage_lambda)
@@ -558,7 +796,12 @@ class bdnn_simulator():
         lineage_rates[:, 3] = lineage_rates[:, 3] * self.scale
         lineage_rates[:, 4] = lineage_rates[:, 4] * self.scale
 
-        return -np.array(ts) / self.scale, -np.array(te) / self.scale, anc_desc, cont_traits, cat_traits, mass_ext_time, mass_ext_mag, np.array(lineage_victim_mass_extinction), lineage_weighted_lambda_tt, lineage_weighted_mu_tt, lineage_rates, biogeo, areas_comb, lineage_rates_through_time, nwk_str, exceeded_diversity, species_trait_list
+        return -np.array(ts) / self.scale, -np.array(te) / self.scale, anc_desc, \
+            cont_traits, cat_traits, mass_ext_time, mass_ext_mag, \
+            np.array(lineage_victim_mass_extinction), \
+            lineage_weighted_lambda_tt, lineage_weighted_mu_tt, lineage_rates, \
+            biogeo, areas_comb, lineage_rates_through_time, state_diversity_through_time, \
+            nwk_str, exceeded_diversity, species_trait_list
 
 
     def get_random_settings(self, root, sp_env_ts, ex_env_ts, verbose):
@@ -662,13 +905,21 @@ class bdnn_simulator():
             extirpation = np.random.uniform(np.min(self.extirpation), np.max(self.extirpation), 1)
 
         # environmental effects
-        sp_env_eff = np.random.uniform( 1.0 / np.min(self.sp_env_eff), 1.0 / np.max(self.sp_env_eff), 1)
-        ex_env_eff = np.random.uniform(1.0 / np.min(self.ex_env_eff), 1.0 / np.max(self.ex_env_eff), 1)
+        sp_env_eff = np.random.uniform(np.min(self.sp_env_eff), np.max(self.sp_env_eff), 1)
+        ex_env_eff = np.random.uniform(np.min(self.ex_env_eff), np.max(self.ex_env_eff), 1)
+
+        # diversity-dependent effects by state
+        divdep_eff_sp = np.random.uniform(np.min(self.divdep_sp_eff), np.max(self.divdep_sp_eff), 1)
+        divdep_eff_ex = np.random.uniform(np.min(self.divdep_ex_eff), np.max(self.divdep_ex_eff), 1)
 
         if self.sp_env_file is not None:
             time_vec = np.arange(int(np.abs(root) * self.scale) + 2)
             # What if temporal resolution of the environment is coarser than time_vec?
             self._env_sp_binned = get_binned_continuous_variable(sp_env_ts, time_vec, self.scale)
+            self._env_sp_mean = np.mean(self._env_sp_binned)
+            self._env_sp_std = np.std(self._env_sp_binned)
+        elif self.env_sim is True:
+            self._env_sp_binned = sp_env_ts[:,1]
             self._env_sp_mean = np.mean(self._env_sp_binned)
             self._env_sp_std = np.std(self._env_sp_binned)
         else:
@@ -679,11 +930,101 @@ class bdnn_simulator():
             self._env_ex_binned = get_binned_continuous_variable(ex_env_ts, time_vec, self.scale)
             self._env_ex_mean = np.mean(self._env_ex_binned)
             self._env_ex_std = np.std(self._env_ex_binned)
+        elif self.env_sim is True:
+            self._env_ex_binned = ex_env_ts[:,1]
+            self._env_ex_mean = np.mean(self._env_ex_binned)
+            self._env_ex_std = np.std(self._env_ex_binned)
         else:
             ex_env_binned = None
 
-        return dT, L_shifts, M_shifts, L, M, timesL, timesM, linL, linM, n_cont_traits, cont_traits_varcov, cont_traits_Theta1, cont_traits_alpha, cont_traits_varcov_clado, cont_traits_effect_sp, cont_traits_effect_ex, expected_sd_cont_traits, cont_traits_effect_shift_sp, cont_traits_effect_shift_ex, n_cat_traits, cat_states, cat_traits_Q, cat_trait_effect, n_areas, dispersal, extirpation, sp_env_eff, ex_env_eff
+        return dT, L_shifts, M_shifts, L, M, timesL, timesM, linL, linM, \
+            n_cont_traits, cont_traits_varcov, cont_traits_Theta1, cont_traits_alpha, cont_traits_varcov_clado, \
+            cont_traits_effect_sp, cont_traits_effect_ex, expected_sd_cont_traits, \
+            cont_traits_effect_shift_sp, cont_traits_effect_shift_ex, \
+            n_cat_traits, cat_states, cat_traits_Q, cat_trait_effect, \
+            n_areas, dispersal, extirpation, \
+            sp_env_eff, ex_env_eff, divdep_eff_sp, divdep_eff_ex
 
+    def get_env_effect_by_state(self, base_env_eff, cat_state, state_effects):
+        """
+        Resolve the effective environmental effect for a lineage.
+
+        The categorical state is treated only as a label used to index a user-
+        supplied vector of per-state modifiers. The numeric value of the state
+        has no direct mathematical meaning.
+
+        Parameters
+        ----------
+        base_env_eff : float or array-like of length 1
+            Baseline environmental effect for the simulation.
+        cat_state : int
+            State of the first categorical trait for the lineage.
+        state_effects : list, np.ndarray, or None
+            Per-state multipliers. If None, use the baseline effect unchanged.
+
+        Returns
+        -------
+        float
+            Effective environmental effect for this lineage and state.
+        """
+        base_env_eff = float(np.asarray(base_env_eff).reshape(-1)[0])
+
+        if state_effects is None:
+            return base_env_eff
+
+        cat_state = int(cat_state)
+        if cat_state < 0 or cat_state >= len(state_effects):
+            raise IndexError(
+                f"Categorical state {cat_state} is outside the provided "
+                f"environment-effect vector of length {len(state_effects)}."
+            )
+
+        state_multiplier = state_effects[cat_state]
+        if state_multiplier is None:
+            state_multiplier = 1.0
+
+        return float(base_env_eff * state_multiplier)
+
+    def get_rate_by_env_transformation(self, r, t, env_eff, rate_type='l'):
+        """
+        Transform a rate by the environmental variable at time t.
+
+        Positive env_eff gives a peak around the environmental mean.
+        Negative env_eff gives the inverse relationship.
+        Returns both the transformed rate and the multiplier applied.
+        """
+        env_eff = float(np.asarray(env_eff).reshape(-1)[0])
+
+        if rate_type == 'l':
+            env = self._env_sp_binned
+            env_mean = self._env_sp_mean
+            env_sd = self._env_sp_std
+        else:
+            env = self._env_ex_binned
+            env_mean = self._env_ex_mean
+            env_sd = self._env_ex_std
+
+        if env is None:
+            return float(r), 1.0
+
+        t_idx = min(int(t), len(env) - 1)
+
+        if np.isnan(env[t_idx]):
+            return float(r), 1.0
+
+        sd = env_sd * np.abs(env_eff)
+        if sd <= 0.0 or np.isnan(sd):
+            return float(r), 1.0
+
+        max_pdf = norm.pdf(env_mean, env_mean, sd)
+        env_pdf = norm.pdf(env[t_idx], env_mean, sd)
+        env_pdf_scaled = env_pdf / max_pdf
+
+        multiplier = env_pdf_scaled
+        if env_eff < 0.0:
+            multiplier = 1.0 - env_pdf_scaled
+
+        return float(r * multiplier), float(multiplier)
 
     def make_shifts_birth_death(self, root_scaled, poi_shifts, range_rate):
         timesR_temp = [root_scaled, 0.]
@@ -1231,29 +1572,6 @@ class bdnn_simulator():
 
         return proportion_ok
 
-
-    def get_rate_by_env_transformation(self, r, t, env_eff, rate_type = 'l', cate_state = 0):
-        if rate_type == 'l':
-            env = self._env_sp_binned
-            env_mean = self._env_sp_mean
-            env_sd = self._env_sp_std
-        else:
-            env = self._env_ex_binned
-            env_mean = self._env_ex_mean
-            env_sd = self._env_ex_std
-        sd = env_sd * np.abs(env_eff)
-        max_pdf = norm.pdf(env_mean, env_mean, sd)
-        env_pdf = norm.pdf(env[t], env_mean, sd)
-        env_pdf_scaled = env_pdf / max_pdf
-        r_env_transf = r * env_pdf_scaled
-        if env_eff < 0.0:
-            r_env_transf = -1 * r_env_transf + r
-        if cate_state == 1:
-            r_env_transf = -1 * r_env_transf + r
-
-        return float(r_env_transf)
-
-
     def format_age_for_newick(self, age):
         frac_age, int_age = np.modf(age)
         int_age = str(int(int_age))
@@ -1413,11 +1731,14 @@ class bdnn_simulator():
         if self.sp_env_file is not None:
             sp_env_ts = np.loadtxt(self.sp_env_file, skiprows=1)
         if self.env_sim is not False:
-            envir_df = EnvironmentSimulator(root = self.root_r, scale = self.scale, model = self.env_sim_model, mean = self.env_sim_mean, sd = self.env_sim_sd, slope = self.env_sim_trend_slope, shift = self.env_sim_shift)
+            root_sim = np.random.uniform(np.min(self.root_r), np.max(self.root_r))
+            envir_df = EnvironmentSimulator(root = root_sim, scale = self.scale, model = self.env_sim_model, mean = self.env_sim_mean, sd = self.env_sim_sd, slope = self.env_sim_trend_slope, shift = self.env_sim_shift)
             sp_env_ts = envir_df.simulate_env()
         ex_env_ts = None
         if self.ex_env_file is not None:
             ex_env_ts = np.loadtxt(self.ex_env_file, skiprows=1)
+        if self.env_sim is not False:
+            ex_env_ts = sp_env_ts
         rangeSP_OK_in_timewindow = True
         if self.timewindow_rangeSP is not None:
             rangeSP_OK_in_timewindow = False
@@ -1429,12 +1750,31 @@ class bdnn_simulator():
             if verbose:
                 print('New round')
             root = -np.random.uniform(np.min(self.root_r), np.max(self.root_r))  # ROOT AGES
-            dT, L_tt, M_tt, L, M, timesL, timesM, linL, linM, n_cont_traits, cont_traits_varcov, cont_traits_Theta1, cont_traits_alpha, cont_traits_varcov_clado, cont_traits_effect_sp, cont_traits_effect_ex, expected_sd_cont_traits, cont_traits_effect_shift_sp, cont_traits_effect_shift_ex, n_cat_traits, cat_states, cat_traits_Q, cat_traits_effect, n_areas, dispersal, extirpation, env_eff_sp, env_eff_ex = self.get_random_settings(root, sp_env_ts, ex_env_ts, verbose)
+            dT, L_tt, M_tt, L, M, timesL, timesM, linL, linM, \
+                n_cont_traits, cont_traits_varcov, cont_traits_Theta1, cont_traits_alpha, cont_traits_varcov_clado, \
+                cont_traits_effect_sp, cont_traits_effect_ex, expected_sd_cont_traits, \
+                cont_traits_effect_shift_sp, cont_traits_effect_shift_ex, \
+                n_cat_traits, cat_states, cat_traits_Q, cat_traits_effect, \
+                n_areas, dispersal, extirpation, \
+                env_eff_sp, env_eff_ex, divdep_eff_sp, divdep_eff_ex = self.get_random_settings(root, sp_env_ts,
+                                                                                                ex_env_ts, verbose)
             self.nwk_leading_digits = len(str(int(np.abs(root))))
             self.nwk_decimal_digits = len(str(int(self.scale)))
             self.nwk_digits = self.nwk_leading_digits + self.nwk_decimal_digits + 1
 
-            FAtrue, LOtrue, anc_desc, cont_traits, cat_traits, mass_ext_time, mass_ext_mag, mass_ext_victim, lineage_weighted_lambda_tt, lineage_weighted_mu_tt, lineage_rates, biogeo, areas_comb, lineage_rates_through_time, nwk_str, exceeded_diversity, species_trait_list = self.simulate(L_tt, M_tt, root, dT, n_cont_traits, cont_traits_varcov, cont_traits_Theta1, cont_traits_alpha, cont_traits_varcov_clado, cont_traits_effect_sp, cont_traits_effect_ex, expected_sd_cont_traits, cont_traits_effect_shift_sp, cont_traits_effect_shift_ex, n_cat_traits, cat_states, cat_traits_Q, cat_traits_effect, n_areas, dispersal, extirpation, env_eff_sp, env_eff_ex)
+            FAtrue, LOtrue, anc_desc, cont_traits, cat_traits, mass_ext_time, mass_ext_mag, \
+                mass_ext_victim, lineage_weighted_lambda_tt, lineage_weighted_mu_tt, lineage_rates, \
+                biogeo, areas_comb, lineage_rates_through_time, state_diversity_through_time, \
+                nwk_str, exceeded_diversity, species_trait_list = self.simulate(
+                L_tt, M_tt, root, dT,
+                n_cont_traits, cont_traits_varcov, cont_traits_Theta1, cont_traits_alpha, cont_traits_varcov_clado,
+                cont_traits_effect_sp, cont_traits_effect_ex, expected_sd_cont_traits,
+                cont_traits_effect_shift_sp, cont_traits_effect_shift_ex,
+                n_cat_traits, cat_states, cat_traits_Q, cat_traits_effect,
+                n_areas, dispersal, extirpation,
+                env_eff_sp, env_eff_ex,
+                divdep_eff_sp, divdep_eff_ex
+            )
             #print('exceeded_diversity', exceeded_diversity)
             prop_cat_traits_ok = self.check_proportion_cat_traits(n_cat_traits, cat_traits)
 
@@ -1469,6 +1809,9 @@ class bdnn_simulator():
         if isinstance(cont_traits, np.ndarray):
             cont_traits[0, :] = cont_traits[1, :]
 
+        lineage_rates_through_time[:, 0, :] = lineage_rates_through_time[:, 0, :] * self.scale
+        lineage_rates_through_time[:, 1, :] = lineage_rates_through_time[:, 1, :] * self.scale
+
         res_bd = {'lambda': L * self.scale,
                   'tshift_lambda': timesL / self.scale,
                   'mu': M * self.scale,
@@ -1497,17 +1840,43 @@ class bdnn_simulator():
                   'cat_traits_effect': cat_traits_effect,
                   'geographic_range': biogeo,
                   'range_states': areas_comb,
-                  'env_eff_sp': 1.0 / env_eff_sp,
-                  'env_eff_ex': 1.0 / env_eff_ex,
-                  'lineage_rates_through_time': lineage_rates_through_time * self.scale,
+                                                      'env_eff_sp': env_eff_sp,
+                  'env_eff_ex': env_eff_ex,
+                  'env_effect_by_state_sp': self.env_effect_by_state_sp,
+                  'env_effect_by_state_ex': self.env_effect_by_state_ex,
+
+                  'divdep_eff_sp': divdep_eff_sp,
+                  'divdep_eff_ex': divdep_eff_ex,
+                  'divdep_sp_mode': self.divdep_sp_mode,
+                  'divdep_ex_mode': self.divdep_ex_mode,
+                  'divdep_state_matrix_sp': self.divdep_state_matrix_sp,
+                  'divdep_state_matrix_ex': self.divdep_state_matrix_ex,
+                  'divdep_effect_by_state_sp': self.divdep_effect_by_state_sp,
+                  'divdep_effect_by_state_ex': self.divdep_effect_by_state_ex,
+
+                  'lineage_rates_through_time': lineage_rates_through_time,
+                  'lineage_rates_through_time_columns': [
+                      'lambda_final',
+                      'mu_final',
+                      'lambda_env_multiplier',
+                      'mu_env_multiplier',
+                      'cat_state',
+                      'env_sp_value',
+                      'env_ex_value',
+                      'lambda_div_multiplier',
+                      'mu_div_multiplier',
+                      'div_signal_sp',
+                      'div_signal_ex'
+                  ],
+                  'state_diversity_through_time': state_diversity_through_time,
                   'tree': tree,
                   'tree_offset': tree_offset,
                   'LTTtrue': LTTtrue,
                   'sim_scale': self.scale,
                   'species_trait_list': species_trait_list}
-        if self.sp_env_file is not None:
+        if self.sp_env_file is not None or self.env_sim is True:
             res_bd['env_sp'] = sp_env_ts
-        if self.ex_env_file is not None:
+        if self.ex_env_file is not None or self.env_sim is True:
             res_bd['env_ex'] = ex_env_ts
         if verbose:
             ltt = ""
@@ -1517,6 +1886,128 @@ class bdnn_simulator():
             print(ltt)
         return res_bd
 
+    def get_state_diversity(self, cat_states_t, extant_idx, n_states):
+        """
+        Count extant species in each state at one time slice.
+        """
+        counts = np.zeros(n_states, dtype=float)
+        if len(extant_idx) == 0:
+            return counts
+
+        states_extant = cat_states_t[extant_idx]
+        states_extant = states_extant[~np.isnan(states_extant)].astype(int)
+
+        for s in range(n_states):
+            counts[s] = np.sum(states_extant == s)
+
+        return counts
+
+
+    def get_diversity_signal_by_state(self, focal_state, state_counts, state_matrix):
+        """
+        Weighted diversity signal affecting a lineage in focal_state.
+        """
+        focal_state = int(focal_state)
+
+        if state_matrix is None:
+            return float(state_counts[focal_state])
+
+        state_matrix = np.asarray(state_matrix, dtype=float)
+
+        if focal_state < 0 or focal_state >= state_matrix.shape[0]:
+            raise IndexError(
+                f"Focal state {focal_state} outside diversity-effect matrix with "
+                f"shape {state_matrix.shape}."
+            )
+        if state_matrix.shape[1] != len(state_counts):
+            raise ValueError(
+                f"Diversity-effect matrix has {state_matrix.shape[1]} columns but "
+                f"state_counts has length {len(state_counts)}."
+            )
+
+        return float(np.sum(state_matrix[focal_state, :] * state_counts))
+
+
+    def get_divdep_effect_by_state(self, base_div_eff, cat_state, state_effects):
+        """
+        Resolve the effective diversity effect magnitude for one lineage.
+        """
+        base_div_eff = float(np.asarray(base_div_eff).reshape(-1)[0])
+
+        if state_effects is None:
+            return base_div_eff
+
+        cat_state = int(cat_state)
+        if cat_state < 0 or cat_state >= len(state_effects):
+            raise IndexError(
+                f"Categorical state {cat_state} is outside the provided "
+                f"diversity-effect vector of length {len(state_effects)}."
+            )
+
+        state_multiplier = state_effects[cat_state]
+        if state_multiplier is None:
+            state_multiplier = 1.0
+
+        return float(base_div_eff * state_multiplier)
+
+
+    def get_diversity_scale(self, state_counts, te_extant):
+        """
+        Scaling used to make diversity effects interpretable across simulations.
+        """
+        if self.divdep_scale_reference == "total_extant":
+            return max(len(te_extant), 1)
+        elif self.divdep_scale_reference == "max_state":
+            return max(np.max(state_counts), 1.0)
+        else:
+            return 1.0
+
+
+    def get_rate_by_diversity_transformation(
+        self,
+        r,
+        diversity_value,
+        div_eff,
+        model="linear",
+        scale_value=1.0
+    ):
+        """
+        Transform a rate according to a diversity signal.
+
+        model:
+            "linear"      -> 1 + beta * x
+            "exponential" -> exp(beta * x)
+            "logistic"    -> 2 * logistic(beta * (x - 1))
+        """
+        div_eff = float(np.asarray(div_eff).reshape(-1)[0])
+        diversity_value = float(diversity_value)
+
+        if scale_value is None or scale_value <= 0.0:
+            scale_value = 1.0
+
+        x = diversity_value / scale_value
+
+        if model is None:
+            return float(r), 1.0
+
+        if model == "linear":
+            multiplier = 1.0 + div_eff * x
+            multiplier = max(multiplier, 0.0)
+
+        elif model == "exponential":
+            multiplier = np.exp(div_eff * x)
+
+        elif model == "logistic":
+            logistic = 1.0 / (1.0 + np.exp(-div_eff * (x - 1.0)))
+            multiplier = 2.0 * logistic
+
+        else:
+            raise ValueError(
+                f"Unknown diversity-dependence model '{model}'. "
+                "Choose from None, 'linear', 'exponential', 'logistic'."
+            )
+
+        return float(r * multiplier), float(multiplier)
 
 
 class fossil_simulator():
@@ -4960,8 +5451,8 @@ class write_FBD_tree():
                                          infer_mass_extinctions = infer_mass_extinctions)
         self.write_occurrence(name = name, edges = edges)
 
+
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 
 
@@ -4979,14 +5470,16 @@ class EnvironmentSimulator:
         model="white",
         slope=None,
         shift=None,
+        shift_mag=10,
         random_state=None,
     ):
-        self.root = root
-        self.scale = scale
+        self.root = float(root)
+        self.scale = float(scale)
         self.mean = mean
         self.sd = sd
         self.model = model
         self.slope = slope
+        self.shift_mag = shift_mag
         self.shift = set(shift) if shift is not None else set()
 
         # RNG
@@ -4998,7 +5491,7 @@ class EnvironmentSimulator:
         self._last_simulation = None  # store most recent result
 
     def simulate_env(self):
-        """Run the simulation and return a pandas DataFrame."""
+        """Run the simulation and return a numpy.ndarray of shape (n, 2) [time, envir]."""
         length = int(self.root * self.scale)
         if length <= 0:
             raise ValueError("root * scale must be positive.")
@@ -5025,9 +5518,9 @@ class EnvironmentSimulator:
         else:
             raise ValueError("Unknown model '{}'".format(self.model))
 
-        df = pd.DataFrame({"time": time_vec, "envir": envir})
-        self._last_simulation = df
-        return df
+        result = np.column_stack((time_vec, envir))  # shape (n, 2)
+        self._last_simulation = result
+        return result
 
     # --- Plot method ---
 
@@ -5052,7 +5545,7 @@ class EnvironmentSimulator:
                 df = self._last_simulation
 
         plt.figure(figsize=figsize)
-        plt.plot(df["time"], df["envir"], **kwargs)
+        plt.plot(df[:, 0], df[:, 1], **kwargs)
         plt.xlabel("Time")
         plt.ylabel("Environment Value")
         plt.title(f"Environmental Simulation ({self.model})")
@@ -5090,5 +5583,6 @@ class EnvironmentSimulator:
 
             # R-like 1-based indexing
             if (i + 1) in self.shift:
-                jump = self.rng.normal(0.0, 10 * self.sd)
+                jump = self.rng.normal(0.0, self.shift_mag * self.sd)
                 envir[i] += jump
+
