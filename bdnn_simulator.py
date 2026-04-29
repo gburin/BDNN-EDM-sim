@@ -507,42 +507,70 @@ class bdnn_simulator():
                     scale_div = self.get_diversity_scale(state_counts, te_extant)
 
                     if self.divdep_sp_mode is not None:
-                        div_signal_sp = self.get_diversity_signal_by_state(
+                        n_states_div = len(cat_states[self.divdep_target_trait_idx])
+
+                        driver_sp = self.get_diversity_driver_by_state(
                             focal_state,
                             state_counts,
-                            self.divdep_state_matrix_sp
+                            self.divdep_state_matrix_sp,
+                            inverse=True  # use False if you want proportional to N instead of 1/N
                         )
+
+                        driver0_sp = self.get_initial_diversity_driver_by_state(
+                            focal_state,
+                            self.divdep_state_matrix_sp,
+                            n_states_div,
+                            inverse=True
+                        )
+
                         eff_sp_div = self.get_divdep_effect_by_state(
                             divdep_eff_sp,
                             focal_state,
                             self.divdep_effect_by_state_sp
                         )
+
                         l_j, div_mult_l_j = self.get_rate_by_diversity_transformation(
                             l_j,
-                            div_signal_sp,
+                            driver_sp,
+                            driver0_sp,
                             eff_sp_div,
-                            model=self.divdep_sp_mode,
-                            scale_value=scale_div
+                            model=self.divdep_sp_mode
                         )
 
-                    if self.divdep_ex_mode is not None:
-                        div_signal_ex = self.get_diversity_signal_by_state(
-                            focal_state,
-                            state_counts,
-                            self.divdep_state_matrix_ex
-                        )
-                        eff_ex_div = self.get_divdep_effect_by_state(
-                            divdep_eff_ex,
-                            focal_state,
-                            self.divdep_effect_by_state_ex
-                        )
-                        m_j, div_mult_m_j = self.get_rate_by_diversity_transformation(
-                            m_j,
-                            div_signal_ex,
-                            eff_ex_div,
-                            model=self.divdep_ex_mode,
-                            scale_value=scale_div
-                        )
+                        div_signal_sp = driver_sp
+
+                        if self.divdep_ex_mode is not None:
+                            n_states_div = len(cat_states[self.divdep_target_trait_idx])
+
+                            driver_ex = self.get_diversity_driver_by_state(
+                                focal_state,
+                                state_counts,
+                                self.divdep_state_matrix_ex,
+                                inverse=True
+                            )
+
+                            driver0_ex = self.get_initial_diversity_driver_by_state(
+                                focal_state,
+                                self.divdep_state_matrix_ex,
+                                n_states_div,
+                                inverse=True
+                            )
+
+                            eff_ex_div = self.get_divdep_effect_by_state(
+                                divdep_eff_ex,
+                                focal_state,
+                                self.divdep_effect_by_state_ex
+                            )
+
+                            m_j, div_mult_m_j = self.get_rate_by_diversity_transformation(
+                                m_j,
+                                driver_ex,
+                                driver0_ex,
+                                eff_ex_div,
+                                model=self.divdep_ex_mode
+                            )
+
+                            div_signal_ex = driver_ex
 
                 # existing carrying-capacity dependence
                 if self.K_lam[0] is not None or self.fixed_K_lam[0] is not None:
@@ -660,45 +688,74 @@ class bdnn_simulator():
                         env_ex_value_new = self._env_ex_binned[env_ex_idx_new]
 
                     if self.divdep_by_state and n_cat_traits > 0 and state_counts is not None:
-                        scale_div_new = self.get_diversity_scale(state_counts, te_extant)
+                        n_states_div = len(cat_states[self.divdep_target_trait_idx])
 
                         if self.divdep_sp_mode is not None:
-                            div_signal_sp_new = self.get_diversity_signal_by_state(
+                            n_states_div = len(cat_states[self.divdep_target_trait_idx])
+
+                            driver_sp_new = self.get_diversity_driver_by_state(
                                 focal_state_new,
                                 state_counts,
-                                self.divdep_state_matrix_sp
+                                self.divdep_state_matrix_sp,
+                                inverse=True
                             )
+
+                            driver0_sp_new = self.get_initial_diversity_driver_by_state(
+                                focal_state_new,
+                                self.divdep_state_matrix_sp,
+                                n_states_div,
+                                inverse=True
+                            )
+
                             eff_sp_div_new = self.get_divdep_effect_by_state(
                                 divdep_eff_sp,
                                 focal_state_new,
                                 self.divdep_effect_by_state_sp
                             )
+
                             l_new, div_mult_l_new = self.get_rate_by_diversity_transformation(
                                 l_new,
-                                div_signal_sp_new,
+                                driver_sp_new,
+                                driver0_sp_new,
                                 eff_sp_div_new,
-                                model=self.divdep_sp_mode,
-                                scale_value=scale_div_new
+                                model=self.divdep_sp_mode
                             )
 
+                            div_signal_sp_new = driver_sp_new
+
                         if self.divdep_ex_mode is not None:
-                            div_signal_ex_new = self.get_diversity_signal_by_state(
+                            n_states_div = len(cat_states[self.divdep_target_trait_idx])
+
+                            driver_ex_new = self.get_diversity_driver_by_state(
                                 focal_state_new,
                                 state_counts,
-                                self.divdep_state_matrix_ex
+                                self.divdep_state_matrix_ex,
+                                inverse=True
                             )
+
+                            driver0_ex_new = self.get_initial_diversity_driver_by_state(
+                                focal_state_new,
+                                self.divdep_state_matrix_ex,
+                                n_states_div,
+                                inverse=True
+                            )
+
                             eff_ex_div_new = self.get_divdep_effect_by_state(
                                 divdep_eff_ex,
                                 focal_state_new,
                                 self.divdep_effect_by_state_ex
                             )
+
                             m_new, div_mult_m_new = self.get_rate_by_diversity_transformation(
                                 m_new,
-                                div_signal_ex_new,
+                                driver_ex_new,
+                                driver0_ex_new,
                                 eff_ex_div_new,
-                                model=self.divdep_ex_mode,
-                                scale_value=scale_div_new
+                                model=self.divdep_ex_mode
                             )
+
+                            div_signal_ex_new = driver_ex_new
+
                     if n_areas > 1:
                         biogeo_new_species = self.empty_traits(root_plus_1, 1)
                         # biogeo_at_origin = biogeo[t_abs, :, j]
@@ -914,28 +971,27 @@ class bdnn_simulator():
 
         if self.sp_env_file is not None:
             time_vec = np.arange(int(np.abs(root) * self.scale) + 2)
-            # What if temporal resolution of the environment is coarser than time_vec?
             self._env_sp_binned = get_binned_continuous_variable(sp_env_ts, time_vec, self.scale)
-            self._env_sp_mean = np.mean(self._env_sp_binned)
-            self._env_sp_std = np.std(self._env_sp_binned)
+            self._env_sp_mean = np.nanmean(self._env_sp_binned)
+            self._env_sp_std = np.nanstd(self._env_sp_binned)
         elif self.env_sim is True:
-            self._env_sp_binned = sp_env_ts[:,1]
-            self._env_sp_mean = np.mean(self._env_sp_binned)
-            self._env_sp_std = np.std(self._env_sp_binned)
+            self._env_sp_binned = sp_env_ts[:, 1]
+            self._env_sp_mean = np.nanmean(self._env_sp_binned)
+            self._env_sp_std = np.nanstd(self._env_sp_binned)
         else:
-            sp_env_binned = None
+            self._env_sp_binned = None
 
         if self.ex_env_file is not None:
             time_vec = np.arange(int(np.abs(root) * self.scale) + 2)
             self._env_ex_binned = get_binned_continuous_variable(ex_env_ts, time_vec, self.scale)
-            self._env_ex_mean = np.mean(self._env_ex_binned)
-            self._env_ex_std = np.std(self._env_ex_binned)
+            self._env_ex_mean = np.nanmean(self._env_ex_binned)
+            self._env_ex_std = np.nanstd(self._env_ex_binned)
         elif self.env_sim is True:
-            self._env_ex_binned = ex_env_ts[:,1]
-            self._env_ex_mean = np.mean(self._env_ex_binned)
-            self._env_ex_std = np.std(self._env_ex_binned)
+            self._env_ex_binned = ex_env_ts[:, 1]
+            self._env_ex_mean = np.nanmean(self._env_ex_binned)
+            self._env_ex_std = np.nanstd(self._env_ex_binned)
         else:
-            ex_env_binned = None
+            self._env_ex_binned = None
 
         return dT, L_shifts, M_shifts, L, M, timesL, timesM, linL, linM, \
             n_cont_traits, cont_traits_varcov, cont_traits_Theta1, cont_traits_alpha, cont_traits_varcov_clado, \
@@ -989,9 +1045,9 @@ class bdnn_simulator():
         """
         Transform a rate by the environmental variable at time t.
 
-        Positive env_eff gives a peak around the environmental mean.
-        Negative env_eff gives the inverse relationship.
-        Returns both the transformed rate and the multiplier applied.
+        The multiplier is centered so that its mean across the full environmental
+        time series is 1. This makes the baseline rate r the average experienced
+        rate through time, rather than the maximum.
         """
         env_eff = float(np.asarray(env_eff).reshape(-1)[0])
 
@@ -1012,17 +1068,70 @@ class bdnn_simulator():
         if np.isnan(env[t_idx]):
             return float(r), 1.0
 
+        # no environmental effect
+        if np.isclose(env_eff, 0.0):
+            return float(r), 1.0
+
         sd = env_sd * np.abs(env_eff)
         if sd <= 0.0 or np.isnan(sd):
             return float(r), 1.0
 
+        # raw bell-shaped response
         max_pdf = norm.pdf(env_mean, env_mean, sd)
-        env_pdf = norm.pdf(env[t_idx], env_mean, sd)
-        env_pdf_scaled = env_pdf / max_pdf
+        raw_multiplier = norm.pdf(env, env_mean, sd) / max_pdf
 
-        multiplier = env_pdf_scaled
+        # inverse response if effect is negative
         if env_eff < 0.0:
-            multiplier = 1.0 - env_pdf_scaled
+            raw_multiplier = 1.0 - raw_multiplier
+
+        # center so mean multiplier across the whole environment is 1
+        mean_multiplier = np.nanmean(raw_multiplier)
+
+        if not np.isfinite(mean_multiplier) or mean_multiplier <= 0.0:
+            multiplier = 1.0
+        else:
+            multiplier = raw_multiplier[t_idx] / mean_multiplier
+
+        return float(r * multiplier), float(multiplier)
+
+    def get_rate_by_diversity_transformation(
+            self,
+            r,
+            driver_current,
+            driver0,
+            div_eff,
+            model="linear"
+    ):
+        """
+        Modify a rate according to a signed diversity driver, anchored so that
+        multiplier = 1 when driver_current = driver0.
+        """
+        div_eff = float(np.asarray(div_eff).reshape(-1)[0])
+        driver_current = float(driver_current)
+        driver0 = float(driver0)
+
+        delta = driver_current - driver0
+
+        if model is None or np.isclose(div_eff, 0.0):
+            return float(r), 1.0
+
+        if model == "linear":
+            multiplier = 1.0 + div_eff * delta
+            multiplier = max(multiplier, 0.0)
+
+        elif model == "exponential":
+            multiplier = np.exp(div_eff * delta)
+
+        elif model == "logistic":
+            raw = 1.0 / (1.0 + np.exp(-div_eff * driver_current))
+            raw0 = 1.0 / (1.0 + np.exp(-div_eff * driver0))
+            multiplier = raw / raw0 if raw0 > 0.0 else 1.0
+
+        else:
+            raise ValueError(
+                f"Unknown diversity-dependence model '{model}'. "
+                "Choose from None, 'linear', 'exponential', 'logistic'."
+            )
 
         return float(r * multiplier), float(multiplier)
 
@@ -1728,16 +1837,26 @@ class bdnn_simulator():
         n_extant = 0
         prop_cat_traits_ok = False
         sp_env_ts = None
+        ex_env_ts = None
+
         if self.sp_env_file is not None:
             sp_env_ts = np.loadtxt(self.sp_env_file, skiprows=1)
-        if self.env_sim is not False:
+        elif self.env_sim is not False:
             root_sim = np.random.uniform(np.min(self.root_r), np.max(self.root_r))
-            envir_df = EnvironmentSimulator(root = root_sim, scale = self.scale, model = self.env_sim_model, mean = self.env_sim_mean, sd = self.env_sim_sd, slope = self.env_sim_trend_slope, shift = self.env_sim_shift)
+            envir_df = EnvironmentSimulator(
+                root=root_sim,
+                scale=self.scale,
+                model=self.env_sim_model,
+                mean=self.env_sim_mean,
+                sd=self.env_sim_sd,
+                slope=self.env_sim_trend_slope,
+                shift=self.env_sim_shift
+            )
             sp_env_ts = envir_df.simulate_env()
-        ex_env_ts = None
+
         if self.ex_env_file is not None:
             ex_env_ts = np.loadtxt(self.ex_env_file, skiprows=1)
-        if self.env_sim is not False:
+        elif self.env_sim is not False:
             ex_env_ts = sp_env_ts
         rangeSP_OK_in_timewindow = True
         if self.timewindow_rangeSP is not None:
@@ -1874,9 +1993,9 @@ class bdnn_simulator():
                   'LTTtrue': LTTtrue,
                   'sim_scale': self.scale,
                   'species_trait_list': species_trait_list}
-        if self.sp_env_file is not None or self.env_sim is True:
+        if sp_env_ts is not None:
             res_bd['env_sp'] = sp_env_ts
-        if self.ex_env_file is not None or self.env_sim is True:
+        if ex_env_ts is not None:
             res_bd['env_ex'] = ex_env_ts
         if verbose:
             ltt = ""
@@ -1962,53 +2081,135 @@ class bdnn_simulator():
         else:
             return 1.0
 
-
-    def get_rate_by_diversity_transformation(
-        self,
-        r,
-        diversity_value,
-        div_eff,
-        model="linear",
-        scale_value=1.0
+    def get_initial_diversity_driver_by_state(
+            self,
+            focal_state,
+            state_matrix,
+            n_states,
+            inverse=True
     ):
         """
-        Transform a rate according to a diversity signal.
-
-        model:
-            "linear"      -> 1 + beta * x
-            "exponential" -> exp(beta * x)
-            "logistic"    -> 2 * logistic(beta * (x - 1))
+        Initial signed diversity driver for a focal state, assuming the simulation
+        starts with one species in each state.
         """
-        div_eff = float(np.asarray(div_eff).reshape(-1)[0])
-        diversity_value = float(diversity_value)
+        focal_state = int(focal_state)
 
-        if scale_value is None or scale_value <= 0.0:
-            scale_value = 1.0
+        # initial counts: one lineage in each state
+        init_counts = np.ones(n_states, dtype=float)
 
-        x = diversity_value / scale_value
+        return self.get_diversity_driver_by_state(
+            focal_state,
+            init_counts,
+            state_matrix,
+            inverse=inverse
+        )
 
-        if model is None:
-            return float(r), 1.0
+    def get_initial_diversity_driver_by_state(
+            self,
+            focal_state,
+            state_matrix,
+            n_states,
+            inverse=True
+    ):
+        """
+        Initial signed diversity driver for a focal state, assuming the simulation
+        starts with one species in each state.
+        """
+        focal_state = int(focal_state)
 
-        if model == "linear":
-            multiplier = 1.0 + div_eff * x
-            multiplier = max(multiplier, 0.0)
+        # initial counts: one lineage in each state
+        init_counts = np.ones(n_states, dtype=float)
 
-        elif model == "exponential":
-            multiplier = np.exp(div_eff * x)
+        return self.get_diversity_driver_by_state(
+            focal_state,
+            init_counts,
+            state_matrix,
+            inverse=inverse
+        )
 
-        elif model == "logistic":
-            logistic = 1.0 / (1.0 + np.exp(-div_eff * (x - 1.0)))
-            multiplier = 2.0 * logistic
+    def get_diversity_trajectory_by_state(self, focal_state, state_diversity_tt, state_matrix):
+        """
+        Return the full diversity signal through time for a focal state.
+        """
+        focal_state = int(focal_state)
 
-        else:
-            raise ValueError(
-                f"Unknown diversity-dependence model '{model}'. "
-                "Choose from None, 'linear', 'exponential', 'logistic'."
+        if state_diversity_tt is None:
+            return None
+
+        state_diversity_tt = np.asarray(state_diversity_tt, dtype=float)
+
+        if state_matrix is None:
+            return state_diversity_tt[:, focal_state]
+
+        state_matrix = np.asarray(state_matrix, dtype=float)
+
+        if focal_state < 0 or focal_state >= state_matrix.shape[0]:
+            raise IndexError(
+                f"Focal state {focal_state} outside diversity-effect matrix with "
+                f"shape {state_matrix.shape}."
             )
 
-        return float(r * multiplier), float(multiplier)
+        return np.nansum(state_diversity_tt * state_matrix[focal_state, :], axis=1)
 
+    def get_diversity_driver_by_state(
+            self,
+            focal_state,
+            state_counts,
+            state_matrix,
+            inverse=True,
+            min_diversity=1.0
+    ):
+        """
+        Compute the signed diversity driver for a focal state.
+
+        Parameters
+        ----------
+        focal_state : int
+            State of the focal lineage.
+        state_counts : array-like
+            Current extant diversity in each state.
+        state_matrix : array-like or None
+            Signed coefficient matrix. Row = focal state, columns = source states.
+            Negative values are allowed.
+        inverse : bool
+            If True, use 1/N_k for each source state.
+            If False, use N_k.
+        min_diversity : float
+            Lower bound to avoid division by zero.
+
+        Returns
+        -------
+        float
+            Signed diversity driver for the focal lineage.
+        """
+        focal_state = int(focal_state)
+        state_counts = np.asarray(state_counts, dtype=float)
+
+        counts = state_counts.copy()
+        counts[counts < min_diversity] = min_diversity
+
+        if inverse:
+            features = 1.0 / counts
+        else:
+            features = counts
+
+        if state_matrix is None:
+            # default: own-state only, positive effect
+            return float(features[focal_state])
+
+        state_matrix = np.asarray(state_matrix, dtype=float)
+
+        if focal_state < 0 or focal_state >= state_matrix.shape[0]:
+            raise IndexError(
+                f"Focal state {focal_state} outside matrix with shape {state_matrix.shape}."
+            )
+
+        if state_matrix.shape[1] != len(features):
+            raise ValueError(
+                f"Matrix has {state_matrix.shape[1]} columns but state_counts has length {len(features)}."
+            )
+
+        return float(np.sum(state_matrix[focal_state, :] * features))
 
 class fossil_simulator():
     def __init__(self,
