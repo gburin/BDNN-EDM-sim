@@ -128,6 +128,10 @@ class bdnn_simulator():
                  env_sim_sd = 1,
                  env_sim_trend_slope = 0.001,
                  env_sim_shift = [100, 200],
+                 env_effect_sp_per_state=None,
+                 env_effect_ex_per_state=None,
+                 div_effect_sp_per_state=None,
+                 div_effect_ex_per_state=None,
                  env_sim_shift_mag = 10,
                  K_lam = None, # carrying capacity K
                  K_mu = None, # carrying capacity K
@@ -139,7 +143,8 @@ class bdnn_simulator():
                  # overwrittes K_lam
                  fixed_K_lam = None,
                  fixed_K_mu = None,
-                 seed = None):
+                 seed = None,
+                 max_simulation_attempts = None):
         self.s_species = s_species
         self.rangeSP = rangeSP
         self.minSP = np.min(rangeSP)
@@ -196,6 +201,10 @@ class bdnn_simulator():
         self.ex_env_eff = ex_env_eff
         self.env_effect_by_state_sp = env_effect_by_state_sp
         self.env_effect_by_state_ex = env_effect_by_state_ex
+        self.env_effect_sp_per_state = env_effect_sp_per_state
+        self.env_effect_ex_per_state = env_effect_ex_per_state
+        self.div_effect_sp_per_state = div_effect_sp_per_state
+        self.div_effect_ex_per_state = div_effect_ex_per_state
         self.divdep_by_state = divdep_by_state
         self.divdep_target_trait_idx = divdep_target_trait_idx
         self.divdep_sp_mode = divdep_sp_mode
@@ -219,6 +228,7 @@ class bdnn_simulator():
         self.fixed_K_lam = fixed_K_lam,
         self.fixed_K_mu = fixed_K_mu,
         self.seed = seed
+        self.max_simulation_attempts = max_simulation_attempts,
         self._init_seed()
 
 
@@ -446,6 +456,11 @@ class bdnn_simulator():
                         focal_state,
                         self.env_effect_by_state_sp
                     )
+                    eff_sp_j = self.apply_effect_state_mask(
+                        eff_sp_j,
+                        focal_state,
+                        self.env_effect_sp_per_state
+                    )
                     l_j, env_mult_l_j = self.get_rate_by_env_transformation(
                         l_j, t_abs, eff_sp_j, rate_type='l'
                     )
@@ -457,6 +472,11 @@ class bdnn_simulator():
                         env_eff_ex,
                         focal_state,
                         self.env_effect_by_state_ex
+                    )
+                    eff_ex_j = self.apply_effect_state_mask(
+                        eff_ex_j,
+                        focal_state,
+                        self.env_effect_ex_per_state
                     )
                     m_j, env_mult_m_j = self.get_rate_by_env_transformation(
                         m_j, t_abs, eff_ex_j, rate_type='m'
@@ -529,6 +549,12 @@ class bdnn_simulator():
                             self.divdep_effect_by_state_sp
                         )
 
+                        eff_sp_div = self.apply_effect_state_mask(
+                            eff_sp_div,
+                            focal_state,
+                            self.div_effect_sp_per_state
+                        )
+
                         l_j, div_mult_l_j = self.get_rate_by_diversity_transformation(
                             l_j,
                             driver_sp,
@@ -560,6 +586,12 @@ class bdnn_simulator():
                                 divdep_eff_ex,
                                 focal_state,
                                 self.divdep_effect_by_state_ex
+                            )
+
+                            eff_ex_div = self.apply_effect_state_mask(
+                                eff_ex_div,
+                                focal_state,
+                                self.div_effect_ex_per_state
                             )
 
                             m_j, div_mult_m_j = self.get_rate_by_diversity_transformation(
@@ -669,6 +701,11 @@ class bdnn_simulator():
                             focal_state_new,
                             self.env_effect_by_state_sp
                         )
+                        eff_sp_new = self.apply_effect_state_mask(
+                            eff_sp_new,
+                            focal_state_new,
+                            self.env_effect_sp_per_state
+                        )
                         l_new, env_mult_l_new = self.get_rate_by_env_transformation(
                             l_new, t_abs, eff_sp_new, rate_type='l'
                         )
@@ -680,6 +717,11 @@ class bdnn_simulator():
                             env_eff_ex,
                             focal_state_new,
                             self.env_effect_by_state_ex
+                        )
+                        eff_ex_new = self.apply_effect_state_mask(
+                            eff_ex_new,
+                            focal_state_new,
+                            self.env_effect_ex_per_state
                         )
                         m_new, env_mult_m_new = self.get_rate_by_env_transformation(
                             m_new, t_abs, eff_ex_new, rate_type='m'
@@ -713,6 +755,12 @@ class bdnn_simulator():
                                 self.divdep_effect_by_state_sp
                             )
 
+                            eff_sp_div_new = self.apply_effect_state_mask(
+                                eff_sp_div_new,
+                                focal_state_new,
+                                self.div_effect_sp_per_state
+                            )
+
                             l_new, div_mult_l_new = self.get_rate_by_diversity_transformation(
                                 l_new,
                                 driver_sp_new,
@@ -744,6 +792,12 @@ class bdnn_simulator():
                                 divdep_eff_ex,
                                 focal_state_new,
                                 self.divdep_effect_by_state_ex
+                            )
+
+                            eff_ex_div_new = self.apply_effect_state_mask(
+                                eff_ex_div_new,
+                                focal_state_new,
+                                self.div_effect_ex_per_state
                             )
 
                             m_new, div_mult_m_new = self.get_rate_by_diversity_transformation(
@@ -1003,25 +1057,12 @@ class bdnn_simulator():
 
     def get_env_effect_by_state(self, base_env_eff, cat_state, state_effects):
         """
-        Resolve the effective environmental effect for a lineage.
+        Resolve the environmental effect for a lineage.
 
-        The categorical state is treated only as a label used to index a user-
-        supplied vector of per-state modifiers. The numeric value of the state
-        has no direct mathematical meaning.
+        If state_effects is provided, treat it as the actual per-state
+        environmental effect value.
 
-        Parameters
-        ----------
-        base_env_eff : float or array-like of length 1
-            Baseline environmental effect for the simulation.
-        cat_state : int
-            State of the first categorical trait for the lineage.
-        state_effects : list, np.ndarray, or None
-            Per-state multipliers. If None, use the baseline effect unchanged.
-
-        Returns
-        -------
-        float
-            Effective environmental effect for this lineage and state.
+        If state_effects is None, use base_env_eff.
         """
         base_env_eff = float(np.asarray(base_env_eff).reshape(-1)[0])
 
@@ -1029,17 +1070,19 @@ class bdnn_simulator():
             return base_env_eff
 
         cat_state = int(cat_state)
+
         if cat_state < 0 or cat_state >= len(state_effects):
             raise IndexError(
                 f"Categorical state {cat_state} is outside the provided "
                 f"environment-effect vector of length {len(state_effects)}."
             )
 
-        state_multiplier = state_effects[cat_state]
-        if state_multiplier is None:
-            state_multiplier = 1.0
+        state_effect = state_effects[cat_state]
 
-        return float(base_env_eff * state_multiplier)
+        if state_effect is None:
+            return base_env_eff
+
+        return float(state_effect)
 
     def get_rate_by_env_transformation(self, r, t, env_eff, rate_type='l'):
         """
@@ -1865,9 +1908,37 @@ class bdnn_simulator():
             self.minSP = 0.0
             self.maxSP = np.inf
         exceeded_diversity = True
-        while len(LOtrue) < self.minSP or len(LOtrue) > self.maxSP or n_extinct < self.minEX_SP or n_extant < self.minExtant_SP or n_extant > self.maxExtant_SP or prop_cat_traits_ok == False or rangeSP_OK_in_timewindow == False or exceeded_diversity:
+        simulation_attempt = 0
+
+        while (
+                len(LOtrue) < self.minSP
+                or len(LOtrue) > self.maxSP
+                or n_extinct < self.minEX_SP
+                or n_extant < self.minExtant_SP
+                or n_extant > self.maxExtant_SP
+                or prop_cat_traits_ok == False
+                or rangeSP_OK_in_timewindow == False
+                or exceeded_diversity
+        ):
+            simulation_attempt += 1
+
+            if (
+                    self.max_simulation_attempts is not None
+                    and simulation_attempt > self.max_simulation_attempts
+            ):
+                raise RuntimeError(
+                    "bdnn_simulator failed to generate a valid dataset after "
+                    f"{self.max_simulation_attempts} internal attempts. "
+                    f"Last status: N_species={len(LOtrue)}, "
+                    f"n_extinct={n_extinct}, "
+                    f"n_extant={n_extant}, "
+                    f"prop_cat_traits_ok={prop_cat_traits_ok}, "
+                    f"rangeSP_OK_in_timewindow={rangeSP_OK_in_timewindow}, "
+                    f"exceeded_diversity={exceeded_diversity}."
+                )
+
             if verbose:
-                print('New round')
+                print(f"New round {simulation_attempt}")
             root = -np.random.uniform(np.min(self.root_r), np.max(self.root_r))  # ROOT AGES
             dT, L_tt, M_tt, L, M, timesL, timesM, linL, linM, \
                 n_cont_traits, cont_traits_varcov, cont_traits_Theta1, cont_traits_alpha, cont_traits_varcov_clado, \
@@ -1936,6 +2007,10 @@ class bdnn_simulator():
                   'mu': M * self.scale,
                   'tshift_mu': timesM / self.scale,
                   'true_rates_through_time': true_rates_through_time,
+
+                  'simulation_internal_attempts': simulation_attempt,
+                  'max_simulation_attempts': self.max_simulation_attempts,
+
                   'mass_ext_time': mass_ext_time,
                   'mass_ext_magnitude': mass_ext_mag,
                   'mass_ext_victim': mass_ext_victim,
@@ -1959,19 +2034,28 @@ class bdnn_simulator():
                   'cat_traits_effect': cat_traits_effect,
                   'geographic_range': biogeo,
                   'range_states': areas_comb,
-                                                      'env_eff_sp': env_eff_sp,
+
+                  # environmental effects and switches
+                  'env_eff_sp': env_eff_sp,
                   'env_eff_ex': env_eff_ex,
                   'env_effect_by_state_sp': self.env_effect_by_state_sp,
                   'env_effect_by_state_ex': self.env_effect_by_state_ex,
+                  'env_effect_sp_per_state': self.env_effect_sp_per_state,
+                  'env_effect_ex_per_state': self.env_effect_ex_per_state,
 
+                  # diversity effects and switches
                   'divdep_eff_sp': divdep_eff_sp,
                   'divdep_eff_ex': divdep_eff_ex,
+                  'divdep_effect_by_state_sp': self.divdep_effect_by_state_sp,
+                  'divdep_effect_by_state_ex': self.divdep_effect_by_state_ex,
+                  'div_effect_sp_per_state': self.div_effect_sp_per_state,
+                  'div_effect_ex_per_state': self.div_effect_ex_per_state,
+
+                  # diversity model settings
                   'divdep_sp_mode': self.divdep_sp_mode,
                   'divdep_ex_mode': self.divdep_ex_mode,
                   'divdep_state_matrix_sp': self.divdep_state_matrix_sp,
                   'divdep_state_matrix_ex': self.divdep_state_matrix_ex,
-                  'divdep_effect_by_state_sp': self.divdep_effect_by_state_sp,
-                  'divdep_effect_by_state_ex': self.divdep_effect_by_state_ex,
 
                   'lineage_rates_through_time': lineage_rates_through_time,
                   'lineage_rates_through_time_columns': [
@@ -1988,11 +2072,31 @@ class bdnn_simulator():
                       'div_signal_ex'
                   ],
                   'state_diversity_through_time': state_diversity_through_time,
+
+                  'env_sp_binned': (
+                      np.column_stack((
+                          np.arange(len(self._env_sp_binned)) / self.scale,
+                          self._env_sp_binned
+                      ))
+                      if hasattr(self, "_env_sp_binned") and self._env_sp_binned is not None
+                      else None
+                  ),
+
+                  'env_ex_binned': (
+                      np.column_stack((
+                          np.arange(len(self._env_ex_binned)) / self.scale,
+                          self._env_ex_binned
+                      ))
+                      if hasattr(self, "_env_ex_binned") and self._env_ex_binned is not None
+                      else None
+                  ),
+
                   'tree': tree,
                   'tree_offset': tree_offset,
                   'LTTtrue': LTTtrue,
                   'sim_scale': self.scale,
-                  'species_trait_list': species_trait_list}
+                  'species_trait_list': species_trait_list,
+                  }
         if sp_env_ts is not None:
             res_bd['env_sp'] = sp_env_ts
         if ex_env_ts is not None:
@@ -2046,10 +2150,14 @@ class bdnn_simulator():
 
         return float(np.sum(state_matrix[focal_state, :] * state_counts))
 
-
     def get_divdep_effect_by_state(self, base_div_eff, cat_state, state_effects):
         """
-        Resolve the effective diversity effect magnitude for one lineage.
+        Resolve the diversity-dependent effect for a lineage.
+
+        If state_effects is provided, treat it as the actual per-state
+        diversity effect value.
+
+        If state_effects is None, use base_div_eff.
         """
         base_div_eff = float(np.asarray(base_div_eff).reshape(-1)[0])
 
@@ -2057,17 +2165,19 @@ class bdnn_simulator():
             return base_div_eff
 
         cat_state = int(cat_state)
+
         if cat_state < 0 or cat_state >= len(state_effects):
             raise IndexError(
                 f"Categorical state {cat_state} is outside the provided "
                 f"diversity-effect vector of length {len(state_effects)}."
             )
 
-        state_multiplier = state_effects[cat_state]
-        if state_multiplier is None:
-            state_multiplier = 1.0
+        state_effect = state_effects[cat_state]
 
-        return float(base_div_eff * state_multiplier)
+        if state_effect is None:
+            return base_div_eff
+
+        return float(state_effect)
 
 
     def get_diversity_scale(self, state_counts, te_extant):
@@ -2210,6 +2320,29 @@ class bdnn_simulator():
             )
 
         return float(np.sum(state_matrix[focal_state, :] * features))
+
+    def apply_effect_state_mask(self, effect_value, focal_state, mask):
+        """
+        Switch an effect on/off by focal trait state.
+
+        True  = keep sampled effect
+        False = set effect to zero
+        """
+        if mask is None:
+            return effect_value
+
+        focal_state = int(focal_state)
+        mask = np.asarray(mask, dtype=bool)
+
+        if focal_state < 0 or focal_state >= len(mask):
+            raise IndexError(
+                f"focal_state={focal_state} outside effect mask of length {len(mask)}."
+            )
+
+        if mask[focal_state]:
+            return effect_value
+
+        return 0.0
 
 class fossil_simulator():
     def __init__(self,

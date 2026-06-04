@@ -1205,25 +1205,43 @@ out_env_dep_lamb = plot_combined_diversification_figure(
 ## Running 100 simulations with varying environmental effect
 
 
-from analysis.parallel_simulations import run_prior_simulations_parallel_with_hard_timeouts
+from analysis.parallel_simulations import *
+from analysis.export import *
 
+# rnd_seed = int(np.random.choice(np.arange(1, 1e8), 1)[0])
+rnd_seed = 42
 
 if __name__ == "__main__":
     sampled_values, failed_values = run_prior_simulations_parallel_with_hard_timeouts(
-        n_sims=100,
+        n_sims=10,
         n_processes=10,
-        scale_rate=2,
-        scale_effect=0.5,
+        scale_rate=3,
+        scale_effect=1,
         output_dir="simulation_outputs",
-        timeout_per_simulation=60,
+        timeout_per_simulation=None,
+        max_simulation_attempts=50,
+        seed=rnd_seed,
 
         # your usual simulator settings here
-        rangeSP = [100, 1000],  # min/max size data set
-        minExtant_SP = 3, # minimum number of extant lineages
-        root_r = [20., 20.],  # range root ages
-        scale = 20.,
+        s_species=2,  # number of starting species
+        rangeSP=[10, 1000],  # min/max size data set
+        minExtant_SP=0,  # minimum number of extant lineages
+        root_r=[20., 60.],  # range root ages
+        # rangeL=[0.2, 0.2],  # range of birth rates
+        # rangeM=[0.05, 0.05],  # range of death rates
+        scale=20.,
+        # fixed_Mtt = np.array([[35., 0.01], [0.0, 0.1]]),
+        n_cont_traits=[0, 0],  # number of continuous traits
+        cont_traits_sigma_clado=[0, 0],
+        cont_traits_sigma=[0, 0],  # evolutionary rates for continuous traits
         n_cat_traits=[1, 1],
-        n_cat_traits_states=[2, 2],
+        n_cat_traits_states=[2, 2],  # range number of states for categorical trait
+        cat_traits_diag=None,
+        cat_traits_evolve=False,
+        # cat_traits_Q = np.array([[0, 0], [0, 0]]),
+        cat_traits_effect=np.array([[1., 1.], [1., 1.]]),
+        cat_traits_effect_decr_incr=np.array([[False, False], [False, False]]),
+        cat_traits_min_freq=[0.1],
         env_sim=True,
         env_sim_model="BM",
         env_sim_trend_slope=0.001,
@@ -1231,11 +1249,77 @@ if __name__ == "__main__":
         env_sim_sd=0.01,
         env_sim_shift=[200, 350],
         env_sim_shift_mag=20,
-        sp_env_eff=[1.2, 1.2],  # range environmental effect on speciation rate
-        ex_env_eff=[1.2, 1.2],  # range environmental effect on extinction rate
+        env_effect_sp_per_state=[True, False],
+        env_effect_ex_per_state=[False, False],
+        # sp_env_file = "./temp_series.csv", # Path to environmental file influencing speciation
+        # sp_env_eff=[1.2, 1.2],  # range environmental effect on speciation rate
+        # ex_env_eff=[1.2, 1.2],  # range environmental effect on extinction rate
+        # env_effect_by_state_sp=[1.0, 0.0],
+        # env_effect_by_state_ex=[0.0, 0.0],
         divdep_by_state=False,
-        divdep_sp_mode="exponential",
-        divdep_ex_mode="exponential",
+        divdep_target_trait_idx=0,
+        divdep_sp_mode="linear",
+        divdep_ex_mode="logistic",
+        divdep_sp_per_state=[False, False],
+        divdep_ex_per_state=[False, False],
+        # divdep_sp_eff=[1.0, 1.0],
+        # divdep_ex_eff=[1.0, 1.0],
+        # divdep_effect_by_state_sp=[1.0, 1.0],
+        # divdep_effect_by_state_ex=[1.0, 1.0],
+        divdep_state_matrix_sp=np.array([
+            [0.0, 0.0],
+            [0.0, 0.0]
+        ]),
+        divdep_state_matrix_ex=np.array([
+            [0.0, 0.0],
+            [0.0, 0.0]
+        ]),
 )
 
 
+export_simple_time_series_rates_to_rds(
+    sampled_values,
+    output_dir="simulation_outputs",
+    output_file="combined_plot_data_all_sims.RDS",
+    trait_idx=0
+)
+
+df_export = export_simple_time_series_rates_to_json(
+    sampled_values,
+    output_dir="simulation_outputs",
+    output_file="simple_time_series_rates_all_sims.json",
+    trait_idx=0,
+    summary="mean",
+    pretty=True,
+)
+
+with open(sampled_values.loc[0, "pickle_file"], "rb") as f:
+    res_bd = pickle.load(f)
+
+from analysis.plots import *
+
+out_env_test = plot_combined_diversification_figure(
+    res_bd,
+    trait_idx=0,
+    env_which="sp",     # or "ex"
+    summary="mean",     # or "median"
+    stacked_diversity=False,
+    save_path="figs/test-sim-envir.png",
+    dpi=300
+)
+
+# json_payload = export_combined_plot_data_to_json(
+#     sampled_values,
+#     output_dir="simulation_outputs",
+#     output_file="combined_plot_data_all_sims.json",
+#     trait_idx=0,
+#     summary="mean",
+#     include_lineage_time_data=False,
+#     pretty=True,
+# )
+
+# export.export_plotting_objects_to_rds(
+#     sampled_values,
+#     output_dir="simulation_outputs",
+#     output_file="plotting_objects_all_sims.RDS"
+# )
