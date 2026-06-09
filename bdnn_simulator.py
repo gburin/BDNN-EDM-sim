@@ -1023,29 +1023,48 @@ class bdnn_simulator():
         divdep_eff_sp = np.random.uniform(np.min(self.divdep_sp_eff), np.max(self.divdep_sp_eff), 1)
         divdep_eff_ex = np.random.uniform(np.min(self.divdep_ex_eff), np.max(self.divdep_ex_eff), 1)
 
-        if self.sp_env_file is not None:
-            time_vec = np.arange(int(np.abs(root) * self.scale) + 2)
-            self._env_sp_binned = get_binned_continuous_variable(sp_env_ts, time_vec, self.scale)
-            self._env_sp_mean = np.nanmean(self._env_sp_binned)
-            self._env_sp_std = np.nanstd(self._env_sp_binned)
-        elif self.env_sim is True:
-            self._env_sp_binned = sp_env_ts[:, 1]
+        # ------------------------------------------------------------
+        # Bin environmental variables.
+        #
+        # Use the same binning code for empirical and simulated environments.
+        # EnvironmentSimulator returns time from -root to 0, while the binning
+        # function expects positive ages after multiplying by scale, so we convert
+        # the time column to absolute ages before binning.
+        # ------------------------------------------------------------
+
+        time_vec = np.arange(int(np.abs(root) * self.scale) + 2)
+
+        if sp_env_ts is not None:
+            sp_env_ts_for_binning = np.asarray(sp_env_ts, dtype=float).copy()
+            sp_env_ts_for_binning[:, 0] = np.abs(sp_env_ts_for_binning[:, 0])
+
+            self._env_sp_binned = get_binned_continuous_variable(
+                sp_env_ts_for_binning,
+                time_vec,
+                self.scale
+            )
             self._env_sp_mean = np.nanmean(self._env_sp_binned)
             self._env_sp_std = np.nanstd(self._env_sp_binned)
         else:
             self._env_sp_binned = None
+            self._env_sp_mean = np.nan
+            self._env_sp_std = np.nan
 
-        if self.ex_env_file is not None:
-            time_vec = np.arange(int(np.abs(root) * self.scale) + 2)
-            self._env_ex_binned = get_binned_continuous_variable(ex_env_ts, time_vec, self.scale)
-            self._env_ex_mean = np.nanmean(self._env_ex_binned)
-            self._env_ex_std = np.nanstd(self._env_ex_binned)
-        elif self.env_sim is True:
-            self._env_ex_binned = ex_env_ts[:, 1]
+        if ex_env_ts is not None:
+            ex_env_ts_for_binning = np.asarray(ex_env_ts, dtype=float).copy()
+            ex_env_ts_for_binning[:, 0] = np.abs(ex_env_ts_for_binning[:, 0])
+
+            self._env_ex_binned = get_binned_continuous_variable(
+                ex_env_ts_for_binning,
+                time_vec,
+                self.scale
+            )
             self._env_ex_mean = np.nanmean(self._env_ex_binned)
             self._env_ex_std = np.nanstd(self._env_ex_binned)
         else:
             self._env_ex_binned = None
+            self._env_ex_mean = np.nan
+            self._env_ex_std = np.nan
 
         return dT, L_shifts, M_shifts, L, M, timesL, timesM, linL, linM, \
             n_cont_traits, cont_traits_varcov, cont_traits_Theta1, cont_traits_alpha, cont_traits_varcov_clado, \
@@ -1882,10 +1901,23 @@ class bdnn_simulator():
         sp_env_ts = None
         ex_env_ts = None
 
+        # ------------------------------------------------------------
+        # Build/load environmental time series once before attempting
+        # diversification simulations.
+        #
+        # This makes simulated and empirical environments behave the same way:
+        # both are fixed before the internal validity loop and both are later binned
+        # inside get_random_settings() for the particular sampled root.
+        # ------------------------------------------------------------
+
         if self.sp_env_file is not None:
             sp_env_ts = np.loadtxt(self.sp_env_file, skiprows=1)
+
         elif self.env_sim is not False:
-            root_sim = np.random.uniform(np.min(self.root_r), np.max(self.root_r))
+            # Simulate a single environmental trajectory long enough to cover
+            # any root age that can be drawn in the internal simulation attempts.
+            root_sim = float(np.max(np.abs(self.root_r)))
+
             envir_df = EnvironmentSimulator(
                 root=root_sim,
                 scale=self.scale,
@@ -1893,13 +1925,18 @@ class bdnn_simulator():
                 mean=self.env_sim_mean,
                 sd=self.env_sim_sd,
                 slope=self.env_sim_trend_slope,
-                shift=self.env_sim_shift
+                shift=self.env_sim_shift,
+                shift_mag=self.env_sim_shift_mag
             )
+
             sp_env_ts = envir_df.simulate_env()
 
         if self.ex_env_file is not None:
             ex_env_ts = np.loadtxt(self.ex_env_file, skiprows=1)
+
         elif self.env_sim is not False:
+            # By default, use the same simulated environmental trajectory
+            # for extinction as for speciation.
             ex_env_ts = sp_env_ts
         rangeSP_OK_in_timewindow = True
         if self.timewindow_rangeSP is not None:
