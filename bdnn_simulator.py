@@ -223,12 +223,13 @@ class bdnn_simulator():
         self.env_sim_sd = env_sim_sd
         self.env_sim_trend_slope = env_sim_trend_slope
         self.env_sim_shift = env_sim_shift
+        self.env_sim_shift_mag = env_sim_shift_mag
         self.K_lam = K_lam,
         self.K_mu = K_mu,
         self.fixed_K_lam = fixed_K_lam,
         self.fixed_K_mu = fixed_K_mu,
         self.seed = seed
-        self.max_simulation_attempts = max_simulation_attempts,
+        self.max_simulation_attempts = max_simulation_attempts
         self._init_seed()
 
 
@@ -1105,21 +1106,33 @@ class bdnn_simulator():
 
     def get_rate_by_env_transformation(self, r, t, env_eff, rate_type='l'):
         """
-        Transform a rate by the environmental variable at time t.
+        Transform a rate according to the environmental value at time t.
 
-        The multiplier is centered so that its mean across the full environmental
-        time series is 1. This makes the baseline rate r the average experienced
-        rate through time, rather than the maximum.
+        Zero-anchored directional effect:
+
+            multiplier = exp(env_eff * env_value_scaled)
+
+        Interpretation:
+        - env_value = 0 gives multiplier = 1
+        - env_eff > 0:
+            positive environment -> rate increases
+            negative environment -> rate decreases
+        - env_eff < 0:
+            positive environment -> rate decreases
+            negative environment -> rate increases
+        - env_eff = 0:
+            no effect
+
+        The environmental value is scaled by the SD of the environmental trajectory,
+        but it is NOT centered by the mean and NOT normalized to mean 1.
         """
         env_eff = float(np.asarray(env_eff).reshape(-1)[0])
 
         if rate_type == 'l':
             env = self._env_sp_binned
-            env_mean = self._env_sp_mean
             env_sd = self._env_sp_std
         else:
             env = self._env_ex_binned
-            env_mean = self._env_ex_mean
             env_sd = self._env_ex_std
 
         if env is None:
@@ -1127,32 +1140,25 @@ class bdnn_simulator():
 
         t_idx = min(int(t), len(env) - 1)
 
-        if np.isnan(env[t_idx]):
+        env_value = env[t_idx]
+
+        if not np.isfinite(env_value):
             return float(r), 1.0
 
-        # no environmental effect
         if np.isclose(env_eff, 0.0):
             return float(r), 1.0
 
-        sd = env_sd * np.abs(env_eff)
-        if sd <= 0.0 or np.isnan(sd):
-            return float(r), 1.0
-
-        # raw bell-shaped response
-        max_pdf = norm.pdf(env_mean, env_mean, sd)
-        raw_multiplier = norm.pdf(env, env_mean, sd) / max_pdf
-
-        # inverse response if effect is negative
-        if env_eff < 0.0:
-            raw_multiplier = 1.0 - raw_multiplier
-
-        # center so mean multiplier across the whole environment is 1
-        mean_multiplier = np.nanmean(raw_multiplier)
-
-        if not np.isfinite(mean_multiplier) or mean_multiplier <= 0.0:
-            multiplier = 1.0
+        # Scale by SD only. Do NOT subtract the mean.
+        # This keeps zero as the reference.
+        if env_sd is not None and np.isfinite(env_sd) and env_sd > 0.0:
+            env_value_scaled = float(env_value / env_sd)
         else:
-            multiplier = raw_multiplier[t_idx] / mean_multiplier
+            env_value_scaled = float(env_value)
+
+        multiplier = np.exp(env_eff * env_value_scaled)
+
+        if not np.isfinite(multiplier):
+            multiplier = 1.0
 
         return float(r * multiplier), float(multiplier)
 

@@ -1208,13 +1208,13 @@ out_env_dep_lamb = plot_combined_diversification_figure(
 from analysis.parallel_simulations import *
 from analysis.export import *
 
-# rnd_seed = int(np.random.choice(np.arange(1, 1e8), 1)[0])
-rnd_seed = 42
+rnd_seed = int(np.random.choice(np.arange(1, 1e8), 1)[0])
+# rnd_seed = 42
 
 if __name__ == "__main__":
     sampled_values, failed_values = run_prior_simulations_parallel_with_hard_timeouts(
-        n_sims=10,
-        n_processes=10,
+        n_sims=1,
+        n_processes=1,
         scale_rate=3,
         scale_effect=1,
         output_dir="simulation_outputs",
@@ -1260,8 +1260,8 @@ if __name__ == "__main__":
         divdep_target_trait_idx=0,
         divdep_sp_mode="linear",
         divdep_ex_mode="logistic",
-        divdep_sp_per_state=[False, False],
-        divdep_ex_per_state=[False, False],
+        div_effect_sp_per_state=[False, False],
+        div_effect_ex_per_state=[False, False],
         # divdep_sp_eff=[1.0, 1.0],
         # divdep_ex_eff=[1.0, 1.0],
         # divdep_effect_by_state_sp=[1.0, 1.0],
