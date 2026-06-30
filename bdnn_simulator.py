@@ -128,6 +128,7 @@ class bdnn_simulator():
                  env_sim_sd = 1,
                  env_sim_trend_slope = 0.001,
                  env_sim_shift = [100, 200],
+                 env_sim_levy_rate=None,
                  env_effect_sp_per_state=None,
                  env_effect_ex_per_state=None,
                  div_effect_sp_per_state=None,
@@ -224,6 +225,7 @@ class bdnn_simulator():
         self.env_sim_trend_slope = env_sim_trend_slope
         self.env_sim_shift = env_sim_shift
         self.env_sim_shift_mag = env_sim_shift_mag
+        self.env_sim_levy_rate = env_sim_levy_rate
         self.K_lam = K_lam,
         self.K_mu = K_mu,
         self.fixed_K_lam = fixed_K_lam,
@@ -530,18 +532,18 @@ class bdnn_simulator():
                     if self.divdep_sp_mode is not None:
                         n_states_div = len(cat_states[self.divdep_target_trait_idx])
 
-                        driver_sp = self.get_diversity_driver_by_state(
+                        driver_sp, div_sp_active = self.get_diversity_driver_by_effect_matrix(
                             focal_state,
                             state_counts,
-                            self.divdep_state_matrix_sp,
-                            inverse=True  # use False if you want proportional to N instead of 1/N
+                            self.div_effect_sp_per_state,
+                            inverse=False
                         )
 
-                        driver0_sp = self.get_initial_diversity_driver_by_state(
+                        driver0_sp, div_sp_initial_active = self.get_initial_diversity_driver_by_effect_matrix(
                             focal_state,
-                            self.divdep_state_matrix_sp,
+                            self.div_effect_sp_per_state,
                             n_states_div,
-                            inverse=True
+                            inverse=False
                         )
 
                         eff_sp_div = self.get_divdep_effect_by_state(
@@ -550,18 +552,16 @@ class bdnn_simulator():
                             self.divdep_effect_by_state_sp
                         )
 
-                        eff_sp_div = self.apply_effect_state_mask(
-                            eff_sp_div,
-                            focal_state,
-                            self.div_effect_sp_per_state
-                        )
+                        if not div_sp_active:
+                            eff_sp_div = 0.0
 
                         l_j, div_mult_l_j = self.get_rate_by_diversity_transformation(
                             l_j,
                             driver_sp,
                             driver0_sp,
                             eff_sp_div,
-                            model=self.divdep_sp_mode
+                            model=self.divdep_sp_mode,
+                            logistic_inflection=self._divdep_logistic_inflection
                         )
 
                         div_signal_sp = driver_sp
@@ -569,18 +569,18 @@ class bdnn_simulator():
                         if self.divdep_ex_mode is not None:
                             n_states_div = len(cat_states[self.divdep_target_trait_idx])
 
-                            driver_ex = self.get_diversity_driver_by_state(
+                            driver_ex, div_ex_active = self.get_diversity_driver_by_effect_matrix(
                                 focal_state,
                                 state_counts,
-                                self.divdep_state_matrix_ex,
-                                inverse=True
+                                self.div_effect_ex_per_state,
+                                inverse=False
                             )
 
-                            driver0_ex = self.get_initial_diversity_driver_by_state(
+                            driver0_ex, div_ex_initial_active = self.get_initial_diversity_driver_by_effect_matrix(
                                 focal_state,
-                                self.divdep_state_matrix_ex,
+                                self.div_effect_ex_per_state,
                                 n_states_div,
-                                inverse=True
+                                inverse=False
                             )
 
                             eff_ex_div = self.get_divdep_effect_by_state(
@@ -589,18 +589,16 @@ class bdnn_simulator():
                                 self.divdep_effect_by_state_ex
                             )
 
-                            eff_ex_div = self.apply_effect_state_mask(
-                                eff_ex_div,
-                                focal_state,
-                                self.div_effect_ex_per_state
-                            )
+                            if not div_ex_active:
+                                eff_ex_div = 0.0
 
                             m_j, div_mult_m_j = self.get_rate_by_diversity_transformation(
                                 m_j,
                                 driver_ex,
                                 driver0_ex,
                                 eff_ex_div,
-                                model=self.divdep_ex_mode
+                                model=self.divdep_ex_mode,
+                                logistic_inflection=self._divdep_logistic_inflection
                             )
 
                             div_signal_ex = driver_ex
@@ -702,14 +700,20 @@ class bdnn_simulator():
                             focal_state_new,
                             self.env_effect_by_state_sp
                         )
+
                         eff_sp_new = self.apply_effect_state_mask(
                             eff_sp_new,
                             focal_state_new,
                             self.env_effect_sp_per_state
                         )
+
                         l_new, env_mult_l_new = self.get_rate_by_env_transformation(
-                            l_new, t_abs, eff_sp_new, rate_type='l'
+                            l_new,
+                            t_abs,
+                            eff_sp_new,
+                            rate_type='l'
                         )
+
                         env_sp_idx_new = min(int(t_abs), len(self._env_sp_binned) - 1)
                         env_sp_value_new = self._env_sp_binned[env_sp_idx_new]
 
@@ -719,16 +723,31 @@ class bdnn_simulator():
                             focal_state_new,
                             self.env_effect_by_state_ex
                         )
+
                         eff_ex_new = self.apply_effect_state_mask(
                             eff_ex_new,
                             focal_state_new,
                             self.env_effect_ex_per_state
                         )
+
                         m_new, env_mult_m_new = self.get_rate_by_env_transformation(
-                            m_new, t_abs, eff_ex_new, rate_type='m'
+                            m_new,
+                            t_abs,
+                            eff_ex_new,
+                            rate_type='m'
                         )
+
                         env_ex_idx_new = min(int(t_abs), len(self._env_ex_binned) - 1)
                         env_ex_value_new = self._env_ex_binned[env_ex_idx_new]
+
+                    # ------------------------------------------------------------
+                    # Diversity-dependent effects for the new daughter lineage.
+                    # ------------------------------------------------------------
+
+                    div_mult_l_new = 1.0
+                    div_mult_m_new = 1.0
+                    div_signal_sp_new = np.nan
+                    div_signal_ex_new = np.nan
 
                     if self.divdep_by_state and n_cat_traits > 0 and state_counts is not None:
                         n_states_div = len(cat_states[self.divdep_target_trait_idx])
@@ -736,18 +755,18 @@ class bdnn_simulator():
                         if self.divdep_sp_mode is not None:
                             n_states_div = len(cat_states[self.divdep_target_trait_idx])
 
-                            driver_sp_new = self.get_diversity_driver_by_state(
+                            driver_sp_new, div_sp_new_active = self.get_diversity_driver_by_effect_matrix(
                                 focal_state_new,
                                 state_counts,
-                                self.divdep_state_matrix_sp,
-                                inverse=True
+                                self.div_effect_sp_per_state,
+                                inverse=False
                             )
 
-                            driver0_sp_new = self.get_initial_diversity_driver_by_state(
+                            driver0_sp_new, div_sp_new_initial_active = self.get_initial_diversity_driver_by_effect_matrix(
                                 focal_state_new,
-                                self.divdep_state_matrix_sp,
+                                self.div_effect_sp_per_state,
                                 n_states_div,
-                                inverse=True
+                                inverse=False
                             )
 
                             eff_sp_div_new = self.get_divdep_effect_by_state(
@@ -756,18 +775,16 @@ class bdnn_simulator():
                                 self.divdep_effect_by_state_sp
                             )
 
-                            eff_sp_div_new = self.apply_effect_state_mask(
-                                eff_sp_div_new,
-                                focal_state_new,
-                                self.div_effect_sp_per_state
-                            )
+                            if not div_sp_new_active:
+                                eff_sp_div_new = 0.0
 
                             l_new, div_mult_l_new = self.get_rate_by_diversity_transformation(
                                 l_new,
                                 driver_sp_new,
                                 driver0_sp_new,
                                 eff_sp_div_new,
-                                model=self.divdep_sp_mode
+                                model=self.divdep_sp_mode,
+                                logistic_inflection=self._divdep_logistic_inflection
                             )
 
                             div_signal_sp_new = driver_sp_new
@@ -775,18 +792,18 @@ class bdnn_simulator():
                         if self.divdep_ex_mode is not None:
                             n_states_div = len(cat_states[self.divdep_target_trait_idx])
 
-                            driver_ex_new = self.get_diversity_driver_by_state(
+                            driver_ex_new, div_ex_new_active = self.get_diversity_driver_by_effect_matrix(
                                 focal_state_new,
                                 state_counts,
-                                self.divdep_state_matrix_ex,
-                                inverse=True
+                                self.div_effect_ex_per_state,
+                                inverse=False
                             )
 
-                            driver0_ex_new = self.get_initial_diversity_driver_by_state(
+                            driver0_ex_new, div_ex_new_initial_active = self.get_initial_diversity_driver_by_effect_matrix(
                                 focal_state_new,
-                                self.divdep_state_matrix_ex,
+                                self.div_effect_ex_per_state,
                                 n_states_div,
-                                inverse=True
+                                inverse=False
                             )
 
                             eff_ex_div_new = self.get_divdep_effect_by_state(
@@ -795,18 +812,16 @@ class bdnn_simulator():
                                 self.divdep_effect_by_state_ex
                             )
 
-                            eff_ex_div_new = self.apply_effect_state_mask(
-                                eff_ex_div_new,
-                                focal_state_new,
-                                self.div_effect_ex_per_state
-                            )
+                            if not div_ex_new_active:
+                                eff_ex_div_new = 0.0
 
                             m_new, div_mult_m_new = self.get_rate_by_diversity_transformation(
                                 m_new,
                                 driver_ex_new,
                                 driver0_ex_new,
                                 eff_ex_div_new,
-                                model=self.divdep_ex_mode
+                                model=self.divdep_ex_mode,
+                                logistic_inflection=self._divdep_logistic_inflection
                             )
 
                             div_signal_ex_new = driver_ex_new
@@ -901,6 +916,25 @@ class bdnn_simulator():
                 lineage_weighted_lambda_tt[t_abs-1] = self.get_harmonic_mean(lineage_lambda)
                 lineage_weighted_mu_tt[t_abs-1] = self.get_harmonic_mean(lineage_mu)
 
+        # ------------------------------------------------------------
+        # Present-day rate slice, t_abs = 0.
+        #
+        # The main simulation loop does not process t = 0, so we do not
+        # attempt to reconstruct rates there. Mark all lineage-specific
+        # rates and multipliers at t = 0 as missing.
+        # ------------------------------------------------------------
+
+        lineage_rates_through_time[0, :, :] = np.nan
+
+        if state_diversity_through_time is not None:
+            state_diversity_through_time[0, :] = np.nan
+
+        if len(lineage_weighted_lambda_tt) > 0:
+            lineage_weighted_lambda_tt[0] = np.nan
+
+        if len(lineage_weighted_mu_tt) > 0:
+            lineage_weighted_mu_tt[0] = np.nan
+
         lineage_rates = np.array(lineage_rates)
         lineage_rates[:, 0] = -lineage_rates[:, 0] / self.scale # Why is it not working? lineage_rates[:,:2] = -lineage_rates[:,:2] / self.scale
         lineage_rates[:, 1] = -lineage_rates[:, 1] / self.scale
@@ -933,6 +967,32 @@ class bdnn_simulator():
 
         L_shifts, linL = self.add_linear_time_effect(L_shifts, self.range_linL, self.fixed_Ltt)
         M_shifts, linM = self.add_linear_time_effect(M_shifts, self.range_linM, self.fixed_Mtt)
+
+        # ------------------------------------------------------------
+        # Expected total diversity under a pure birth-death approximation.
+        #
+        # L_shifts and M_shifts are internal per-step rates.
+        # sum(L_shifts - M_shifts) is equivalent to the continuous-time
+        # integral of lambda(t) - mu(t) over the simulation duration.
+        #
+        # N_expected = N0 * exp(integral(lambda - mu) dt)
+        # ------------------------------------------------------------
+
+        net_div_integral = np.nansum(L_shifts - M_shifts)
+
+        expected_total_diversity = float(
+            self.s_species * np.exp(net_div_integral)
+        )
+
+        if not np.isfinite(expected_total_diversity):
+            expected_total_diversity = np.nan
+
+        self._expected_total_diversity = expected_total_diversity
+
+        if np.isfinite(expected_total_diversity) and expected_total_diversity > 0.0:
+            self._divdep_logistic_inflection = 0.5 * expected_total_diversity
+        else:
+            self._divdep_logistic_inflection = np.nan
 
         # categorical traits
         n_cat_traits = np.random.choice(np.arange(min(self.n_cat_traits), max(self.n_cat_traits) + 1), 1)
@@ -1027,10 +1087,18 @@ class bdnn_simulator():
         # ------------------------------------------------------------
         # Bin environmental variables.
         #
-        # Use the same binning code for empirical and simulated environments.
-        # EnvironmentSimulator returns time from -root to 0, while the binning
-        # function expects positive ages after multiplying by scale, so we convert
-        # the time column to absolute ages before binning.
+        # Simulated and empirical environments are handled the same way.
+        # The raw binned environment is stored for output.
+        # The z-scored binned environment is used for rate transformations.
+        # ------------------------------------------------------------
+
+        # ------------------------------------------------------------
+        # Bin and z-score environmental variables.
+        #
+        # The raw binned environment is stored separately.
+        # The z-scored environment is used internally by the rate
+        # transformation and stored as self._env_sp_binned /
+        # self._env_ex_binned for compatibility with the rest of the code.
         # ------------------------------------------------------------
 
         time_vec = np.arange(int(np.abs(root) * self.scale) + 2)
@@ -1039,14 +1107,24 @@ class bdnn_simulator():
             sp_env_ts_for_binning = np.asarray(sp_env_ts, dtype=float).copy()
             sp_env_ts_for_binning[:, 0] = np.abs(sp_env_ts_for_binning[:, 0])
 
-            self._env_sp_binned = get_binned_continuous_variable(
+            self._env_sp_raw_binned = get_binned_continuous_variable(
                 sp_env_ts_for_binning,
                 time_vec,
                 self.scale
             )
-            self._env_sp_mean = np.nanmean(self._env_sp_binned)
-            self._env_sp_std = np.nanstd(self._env_sp_binned)
+
+            (
+                self._env_sp_z_binned,
+                self._env_sp_mean,
+                self._env_sp_std
+            ) = self.zscore_environment(self._env_sp_raw_binned)
+
+            # Use z-scored environment internally.
+            self._env_sp_binned = self._env_sp_z_binned
+
         else:
+            self._env_sp_raw_binned = None
+            self._env_sp_z_binned = None
             self._env_sp_binned = None
             self._env_sp_mean = np.nan
             self._env_sp_std = np.nan
@@ -1055,14 +1133,24 @@ class bdnn_simulator():
             ex_env_ts_for_binning = np.asarray(ex_env_ts, dtype=float).copy()
             ex_env_ts_for_binning[:, 0] = np.abs(ex_env_ts_for_binning[:, 0])
 
-            self._env_ex_binned = get_binned_continuous_variable(
+            self._env_ex_raw_binned = get_binned_continuous_variable(
                 ex_env_ts_for_binning,
                 time_vec,
                 self.scale
             )
-            self._env_ex_mean = np.nanmean(self._env_ex_binned)
-            self._env_ex_std = np.nanstd(self._env_ex_binned)
+
+            (
+                self._env_ex_z_binned,
+                self._env_ex_mean,
+                self._env_ex_std
+            ) = self.zscore_environment(self._env_ex_raw_binned)
+
+            # Use z-scored environment internally.
+            self._env_ex_binned = self._env_ex_z_binned
+
         else:
+            self._env_ex_raw_binned = None
+            self._env_ex_z_binned = None
             self._env_ex_binned = None
             self._env_ex_mean = np.nan
             self._env_ex_std = np.nan
@@ -1104,63 +1192,131 @@ class bdnn_simulator():
 
         return float(state_effect)
 
-    def get_rate_by_env_transformation(self, r, t, env_eff, rate_type='l'):
+    def get_zero_centered_bell_multiplier(
+            self,
+            driver_value,
+            effect,
+            sigma=1.0
+    ):
         """
-        Transform a rate according to the environmental value at time t.
+        Convert a driver value into a bell-shaped rate multiplier.
 
-        Zero-anchored directional effect:
+        The bell is centered at 0 and normalized so that:
 
-            multiplier = exp(env_eff * env_value_scaled)
+            driver_value = 0 -> bell = 1
+
+        The multiplier is:
+
+            multiplier = exp(effect * bell)
 
         Interpretation:
-        - env_value = 0 gives multiplier = 1
-        - env_eff > 0:
-            positive environment -> rate increases
-            negative environment -> rate decreases
-        - env_eff < 0:
-            positive environment -> rate decreases
-            negative environment -> rate increases
-        - env_eff = 0:
-            no effect
+        - effect > 0 gives a maximum rate increase at driver_value = 0
+        - effect < 0 gives a maximum rate decrease at driver_value = 0
+        - far from 0, bell approaches 0 and multiplier approaches 1
 
-        The environmental value is scaled by the SD of the environmental trajectory,
-        but it is NOT centered by the mean and NOT normalized to mean 1.
+        Parameters
+        ----------
+        driver_value : float
+            Environmental z-score or diversity driver deviation.
+
+        effect : float
+            Signed log maximum effect. At driver_value = 0,
+            multiplier = exp(effect).
+
+        sigma : float
+            Width of the bell curve. If the environmental driver is z-scored,
+            sigma=1 means the bell width is one environmental SD.
+        """
+        driver_value = float(np.asarray(driver_value).reshape(-1)[0])
+        effect = float(np.asarray(effect).reshape(-1)[0])
+        sigma = float(np.asarray(sigma).reshape(-1)[0])
+
+        if not np.isfinite(driver_value):
+            return 1.0
+
+        if not np.isfinite(effect) or np.isclose(effect, 0.0):
+            return 1.0
+
+        sigma = abs(sigma)
+
+        if not np.isfinite(sigma) or sigma <= 0.0:
+            return 1.0
+
+        bell = np.exp(-0.5 * (driver_value / sigma) ** 2)
+
+        multiplier = np.exp(effect * bell)
+
+        if not np.isfinite(multiplier):
+            return 1.0
+
+        return float(multiplier)
+
+    def get_rate_by_env_transformation(self, r, t, env_eff, rate_type='l'):
+        """
+        Transform a rate using a normalized zero-centered normal density.
+
+        The environmental variable used here is the z-scored environment:
+
+            z_env = (env - mean(env)) / sd(env)
+
+        The sampled environmental effect is interpreted as the standard
+        deviation of the normal curve:
+
+            sigma = abs(env_eff)
+
+        The multiplier is:
+
+            NormalPDF(z_env | mean=0, sd=sigma)
+            -----------------------------------
+            NormalPDF(0     | mean=0, sd=sigma)
+
+        which gives:
+
+            z_env = 0      -> multiplier = 1
+            z_env != 0    -> multiplier < 1
+
+        Therefore the environmental effect never increases the rate above
+        baseline. It only decreases the rate as the environment moves away
+        from its average value.
         """
         env_eff = float(np.asarray(env_eff).reshape(-1)[0])
 
         if rate_type == 'l':
-            env = self._env_sp_binned
-            env_sd = self._env_sp_std
+            env = getattr(self, "_env_sp_binned", None)
         else:
-            env = self._env_ex_binned
-            env_sd = self._env_ex_std
+            env = getattr(self, "_env_ex_binned", None)
 
         if env is None:
             return float(r), 1.0
 
         t_idx = min(int(t), len(env) - 1)
+        z_env = float(env[t_idx])
 
-        env_value = env[t_idx]
-
-        if not np.isfinite(env_value):
+        if not np.isfinite(z_env):
             return float(r), 1.0
 
-        if np.isclose(env_eff, 0.0):
+        sigma = abs(env_eff)
+
+        # If the per-state controller switched this effect off,
+        # env_eff should be 0, which means no environmental effect.
+        if not np.isfinite(sigma) or np.isclose(sigma, 0.0):
             return float(r), 1.0
 
-        # Scale by SD only. Do NOT subtract the mean.
-        # This keeps zero as the reference.
-        if env_sd is not None and np.isfinite(env_sd) and env_sd > 0.0:
-            env_value_scaled = float(env_value / env_sd)
-        else:
-            env_value_scaled = float(env_value)
+        max_density = norm.pdf(0.0, loc=0.0, scale=sigma)
+        density = norm.pdf(z_env, loc=0.0, scale=sigma)
 
-        multiplier = np.exp(env_eff * env_value_scaled)
+        if not np.isfinite(max_density) or max_density <= 0.0:
+            return float(r), 1.0
+
+        multiplier = density / max_density
 
         if not np.isfinite(multiplier):
             multiplier = 1.0
 
-        return float(r * multiplier), float(multiplier)
+        # Numerical safety: the normalized density should be in [0, 1].
+        multiplier = min(max(float(multiplier), 0.0), 1.0)
+
+        return float(r * multiplier), multiplier
 
     def get_rate_by_diversity_transformation(
             self,
@@ -1168,20 +1324,34 @@ class bdnn_simulator():
             driver_current,
             driver0,
             div_eff,
-            model="linear"
+            model="linear",
+            logistic_inflection=None
     ):
         """
-        Modify a rate according to a signed diversity driver, anchored so that
-        multiplier = 1 when driver_current = driver0.
+        Modify a rate according to a directional diversity effect.
+
+        div_eff is signed before this function is called:
+
+            div_eff = abs(sampled_effect) * direction
+
+        where direction is one of:
+
+            -1 = negative effect
+             0 = no effect
+             1 = positive effect
+
+        For the logistic model, the inflection point can be supplied using
+        logistic_inflection. This should usually be half of the expected total
+        diversity under the sampled birth-death rates.
         """
         div_eff = float(np.asarray(div_eff).reshape(-1)[0])
         driver_current = float(driver_current)
         driver0 = float(driver0)
 
-        delta = driver_current - driver0
-
         if model is None or np.isclose(div_eff, 0.0):
             return float(r), 1.0
+
+        delta = driver_current - driver0
 
         if model == "linear":
             multiplier = 1.0 + div_eff * delta
@@ -1191,17 +1361,60 @@ class bdnn_simulator():
             multiplier = np.exp(div_eff * delta)
 
         elif model == "logistic":
-            raw = 1.0 / (1.0 + np.exp(-div_eff * driver_current))
-            raw0 = 1.0 / (1.0 + np.exp(-div_eff * driver0))
+            if logistic_inflection is None or not np.isfinite(logistic_inflection):
+                logistic_inflection = driver0
+
+            logistic_inflection = float(logistic_inflection)
+
+            # Stable logistic transform.
+            # Positive div_eff: increasing diversity increases the rate.
+            # Negative div_eff: increasing diversity decreases the rate.
+            x = div_eff * (driver_current - logistic_inflection)
+            x0 = div_eff * (driver0 - logistic_inflection)
+
+            x = np.clip(x, -700, 700)
+            x0 = np.clip(x0, -700, 700)
+
+            raw = 1.0 / (1.0 + np.exp(-x))
+            raw0 = 1.0 / (1.0 + np.exp(-x0))
+
             multiplier = raw / raw0 if raw0 > 0.0 else 1.0
 
         else:
             raise ValueError(
                 f"Unknown diversity-dependence model '{model}'. "
-                "Choose from None, 'linear', 'exponential', 'logistic'."
+                "Choose from None, 'linear', 'exponential', or 'logistic'."
             )
 
+        if not np.isfinite(multiplier):
+            multiplier = 1.0
+
         return float(r * multiplier), float(multiplier)
+
+    def zscore_environment(self, env_values):
+        """
+        Convert an environmental trajectory to z-scores.
+
+        z = (x - mean(x)) / sd(x)
+
+        If the trajectory has zero or invalid standard deviation, return zeros
+        for finite values and NaN for missing values.
+        """
+        env_values = np.asarray(env_values, dtype=float)
+
+        env_mean = np.nanmean(env_values)
+        env_sd = np.nanstd(env_values)
+
+        env_z = np.full_like(env_values, np.nan, dtype=float)
+
+        finite = np.isfinite(env_values)
+
+        if not np.isfinite(env_sd) or env_sd <= 0.0:
+            env_z[finite] = 0.0
+        else:
+            env_z[finite] = (env_values[finite] - env_mean) / env_sd
+
+        return env_z, env_mean, env_sd
 
     def make_shifts_birth_death(self, root_scaled, poi_shifts, range_rate):
         timesR_temp = [root_scaled, 0.]
@@ -1277,13 +1490,25 @@ class bdnn_simulator():
 
         return divdep_mu
 
-
     def get_harmonic_mean(self, v):
-        hm = np.nan
-        v = v[np.isnan(v) == False]
-        if len(v) > 0:
-            v = v * self.scale
-            hm = len(v) / np.sum(1.0 / v)
+        """
+        Harmonic mean of lineage-specific rates.
+
+        If any valid rate is exactly zero, the harmonic mean is zero.
+        This avoids RuntimeWarning: divide by zero encountered in divide.
+        """
+        v = np.asarray(v, dtype=float)
+        v = v[np.isfinite(v)]
+
+        if len(v) == 0:
+            return np.nan
+
+        v = v * self.scale
+
+        if np.any(v <= 0.0):
+            return 0.0
+
+        hm = len(v) / np.sum(1.0 / v)
 
         return hm
 
@@ -1932,10 +2157,13 @@ class bdnn_simulator():
                 sd=self.env_sim_sd,
                 slope=self.env_sim_trend_slope,
                 shift=self.env_sim_shift,
-                shift_mag=self.env_sim_shift_mag
+                shift_mag=self.env_sim_shift_mag,
+                levy_rate=self.env_sim_levy_rate,
+                random_state=self.seed
             )
 
             sp_env_ts = envir_df.simulate_env()
+            self._env_levy_shifts = getattr(envir_df, "_last_levy_shifts", None)
 
         if self.ex_env_file is not None:
             ex_env_ts = np.loadtxt(self.ex_env_file, skiprows=1)
@@ -2078,6 +2306,12 @@ class bdnn_simulator():
                   'geographic_range': biogeo,
                   'range_states': areas_comb,
 
+                  # environmental model
+                  'env_sim_model': self.env_sim_model,
+                  'env_sim_levy_rate': self.env_sim_levy_rate,
+                  'env_sim_shift_mag': self.env_sim_shift_mag,
+                  'env_levy_shifts': self._env_levy_shifts,
+
                   # environmental effects and switches
                   'env_eff_sp': env_eff_sp,
                   'env_eff_ex': env_eff_ex,
@@ -2085,6 +2319,33 @@ class bdnn_simulator():
                   'env_effect_by_state_ex': self.env_effect_by_state_ex,
                   'env_effect_sp_per_state': self.env_effect_sp_per_state,
                   'env_effect_ex_per_state': self.env_effect_ex_per_state,
+
+                  # raw environment
+                  'env_sp_raw_binned': (
+                      np.column_stack((
+                          np.arange(len(self._env_sp_raw_binned)) / self.scale,
+                          self._env_sp_raw_binned
+                      ))
+                      if hasattr(self, "_env_sp_raw_binned") and self._env_sp_raw_binned is not None
+                      else None
+                  ),
+
+                  'env_ex_raw_binned': (
+                      np.column_stack((
+                          np.arange(len(self._env_ex_raw_binned)) / self.scale,
+                          self._env_ex_raw_binned
+                      ))
+                      if hasattr(self, "_env_ex_raw_binned") and self._env_ex_raw_binned is not None
+                      else None
+                  ),
+
+                  'env_sp_mean_raw': self._env_sp_mean,
+                  'env_sp_std_raw': self._env_sp_std,
+                  'env_ex_mean_raw': self._env_ex_mean,
+                  'env_ex_std_raw': self._env_ex_std,
+
+                  'expected_total_diversity': self._expected_total_diversity,
+                  'divdep_logistic_inflection': self._divdep_logistic_inflection,
 
                   # diversity effects and switches
                   'divdep_eff_sp': divdep_eff_sp,
@@ -2131,6 +2392,24 @@ class bdnn_simulator():
                           self._env_ex_binned
                       ))
                       if hasattr(self, "_env_ex_binned") and self._env_ex_binned is not None
+                      else None
+                  ),
+
+                  'env_sp_z_binned': (
+                      np.column_stack((
+                          np.arange(len(self._env_sp_z_binned)) / self.scale,
+                          self._env_sp_z_binned
+                      ))
+                      if hasattr(self, "_env_sp_z_binned") and self._env_sp_z_binned is not None
+                      else None
+                  ),
+
+                  'env_ex_z_binned': (
+                      np.column_stack((
+                          np.arange(len(self._env_ex_z_binned)) / self.scale,
+                          self._env_ex_z_binned
+                      ))
+                      if hasattr(self, "_env_ex_z_binned") and self._env_ex_z_binned is not None
                       else None
                   ),
 
@@ -2195,17 +2474,17 @@ class bdnn_simulator():
 
     def get_divdep_effect_by_state(self, base_div_eff, cat_state, state_effects):
         """
-        Resolve the diversity-dependent effect for a lineage.
+        Resolve the sampled diversity-effect magnitude for one lineage.
 
-        If state_effects is provided, treat it as the actual per-state
-        diversity effect value.
+        If state_effects is provided, treat it as the actual sampled per-state
+        magnitude. Do not multiply it by base_div_eff.
 
-        If state_effects is None, use base_div_eff.
+        Direction is applied later by apply_diversity_effect_direction().
         """
         base_div_eff = float(np.asarray(base_div_eff).reshape(-1)[0])
 
         if state_effects is None:
-            return base_div_eff
+            return abs(base_div_eff)
 
         cat_state = int(cat_state)
 
@@ -2218,9 +2497,134 @@ class bdnn_simulator():
         state_effect = state_effects[cat_state]
 
         if state_effect is None:
-            return base_div_eff
+            return abs(base_div_eff)
 
-        return float(state_effect)
+        return abs(float(state_effect))
+
+    def get_diversity_driver_by_effect_matrix(
+            self,
+            focal_state,
+            state_counts,
+            effect_matrix,
+            inverse=False,
+            min_diversity=1.0
+    ):
+        """
+        Compute the signed diversity driver affecting a focal state.
+
+        effect_matrix convention:
+
+            rows    = source states whose diversity is counted
+            columns = focal states whose rates are affected
+
+        Values in effect_matrix:
+
+            -1 = source-state diversity negatively affects focal-state rate
+             0 = no effect
+             1 = source-state diversity positively affects focal-state rate
+
+        Example:
+
+            np.array([
+                [0, -1],
+                [0,  0]
+            ])
+
+        means:
+
+            diversity of state 0 negatively affects rates of state 1.
+        """
+        focal_state = int(focal_state)
+        state_counts = np.asarray(state_counts, dtype=float)
+
+        if effect_matrix is None:
+            # Backward-compatible default: self-diversity, positive effect.
+            counts = np.asarray(state_counts, dtype=float).copy()
+
+            counts[~np.isfinite(counts)] = min_diversity
+            counts[counts < min_diversity] = min_diversity
+
+            if inverse:
+                features = np.divide(
+                    1.0,
+                    counts,
+                    out=np.zeros_like(counts, dtype=float),
+                    where=counts > 0.0
+                )
+            else:
+                features = counts
+
+            return float(features[focal_state]), True
+
+        effect_matrix = np.asarray(effect_matrix, dtype=float)
+
+        if effect_matrix.ndim != 2:
+            raise ValueError(
+                "div_effect_sp_per_state and div_effect_ex_per_state must be "
+                "2D matrices with rows=source states and columns=focal states."
+            )
+
+        n_states = len(state_counts)
+
+        if effect_matrix.shape != (n_states, n_states):
+            raise ValueError(
+                "div_effect_sp_per_state and div_effect_ex_per_state must have "
+                f"shape ({n_states}, {n_states}). Got {effect_matrix.shape}."
+            )
+
+        allowed = np.isin(effect_matrix, [-1.0, 0.0, 1.0])
+        if not np.all(allowed):
+            raise ValueError(
+                "div_effect_sp_per_state and div_effect_ex_per_state must contain "
+                "only -1, 0, or 1."
+            )
+
+        if focal_state < 0 or focal_state >= n_states:
+            raise IndexError(
+                f"focal_state={focal_state} outside matrix with shape "
+                f"{effect_matrix.shape}."
+            )
+
+        counts = state_counts.copy()
+        counts[counts < min_diversity] = min_diversity
+
+        if inverse:
+            features = 1.0 / counts
+        else:
+            features = counts
+
+        # Column = focal state. Entries in this column tell us which
+        # source-state diversities affect this focal state and with what sign.
+        directions = effect_matrix[:, focal_state]
+
+        active = np.any(directions != 0.0)
+
+        if not active:
+            return 0.0, False
+
+        driver = np.sum(directions * features)
+
+        return float(driver), True
+
+    def get_initial_diversity_driver_by_effect_matrix(
+            self,
+            focal_state,
+            effect_matrix,
+            n_states,
+            inverse=False
+    ):
+        """
+        Initial signed diversity driver for a focal state, assuming one
+        starting lineage in each state.
+        """
+        init_counts = np.ones(n_states, dtype=float)
+
+        return self.get_diversity_driver_by_effect_matrix(
+            focal_state,
+            init_counts,
+            effect_matrix,
+            inverse=inverse
+        )
 
 
     def get_diversity_scale(self, state_counts, te_extant):
@@ -2239,7 +2643,7 @@ class bdnn_simulator():
             focal_state,
             state_matrix,
             n_states,
-            inverse=True
+            inverse=False
     ):
         """
         Initial signed diversity driver for a focal state, assuming the simulation
@@ -2262,7 +2666,7 @@ class bdnn_simulator():
             focal_state,
             state_matrix,
             n_states,
-            inverse=True
+            inverse=False
     ):
         """
         Initial signed diversity driver for a focal state, assuming the simulation
@@ -2309,7 +2713,7 @@ class bdnn_simulator():
             focal_state,
             state_counts,
             state_matrix,
-            inverse=True,
+            inverse=False,
             min_diversity=1.0
     ):
         """
@@ -2386,6 +2790,46 @@ class bdnn_simulator():
             return effect_value
 
         return 0.0
+
+    def apply_diversity_effect_direction(self, effect_value, focal_state, direction_by_state):
+        """
+        Apply a pre-defined direction to a sampled diversity-effect intensity.
+
+        direction_by_state values:
+            -1 = negative effect
+             0 = no effect
+             1 = positive effect
+
+        The sampled effect value is used only as an intensity:
+
+            effective_effect = abs(effect_value) * direction
+        """
+        effect_value = float(np.asarray(effect_value).reshape(-1)[0])
+
+        if direction_by_state is None:
+            # Backward-compatible behavior: use sampled sign if no direction array
+            # is supplied.
+            return effect_value
+
+        focal_state = int(focal_state)
+        direction_by_state = np.asarray(direction_by_state, dtype=float)
+
+        if focal_state < 0 or focal_state >= len(direction_by_state):
+            raise IndexError(
+                f"focal_state={focal_state} outside diversity direction array "
+                f"of length {len(direction_by_state)}."
+            )
+
+        direction = float(direction_by_state[focal_state])
+
+        if direction not in [-1.0, 0.0, 1.0]:
+            raise ValueError(
+                "div_effect_sp_per_state and div_effect_ex_per_state must contain "
+                "only -1, 0, or 1. "
+                f"Got {direction} for focal_state={focal_state}."
+            )
+
+        return abs(effect_value) * direction
 
 class fossil_simulator():
     def __init__(self,
@@ -5848,6 +6292,7 @@ class EnvironmentSimulator:
         slope=None,
         shift=None,
         shift_mag=10,
+        levy_rate=None,
         random_state=None,
     ):
         self.root = float(root)
@@ -5858,6 +6303,8 @@ class EnvironmentSimulator:
         self.slope = slope
         self.shift_mag = shift_mag
         self.shift = set(shift) if shift is not None else set()
+        self.levy_rate = levy_rate
+        self._last_levy_shifts = None
 
         # RNG
         if isinstance(random_state, np.random.Generator):
@@ -5892,6 +6339,9 @@ class EnvironmentSimulator:
             self._simulate_bmean(envir)
         elif self.model == "shift":
             self._simulate_shift(envir)
+        elif self.model == "levy":
+            self._simulate_levy(envir, time_vec)
+
         else:
             raise ValueError("Unknown model '{}'".format(self.model))
 
@@ -5963,3 +6413,86 @@ class EnvironmentSimulator:
                 jump = self.rng.normal(0.0, self.shift_mag * self.sd)
                 envir[i] += jump
 
+    def _simulate_levy(self, envir, time_vec):
+        """
+        Simulate an environmental trajectory with Levy-style jumps.
+
+        The process evolves sequentially:
+
+            env[i] = env[i - 1] + Normal(mean, sd)
+
+        At randomly selected shift times, a jump is added only at that time step:
+
+            env[i] = env[i] + Normal(0, shift_mag)
+
+        After the jump, normal Brownian motion resumes from the shifted value
+        until the next shift.
+
+        This means the shift is not post-hoc added to all future values.
+        It changes the state of the process at that point, and future values
+        inherit it only because Brownian motion continues from the new value.
+        """
+        if self.levy_rate is None:
+            raise ValueError(
+                "levy_rate must be provided when model='levy'."
+            )
+
+        levy_rate = float(np.asarray(self.levy_rate).reshape(-1)[0])
+
+        if not np.isfinite(levy_rate) or levy_rate < 0.0:
+            raise ValueError(
+                f"levy_rate must be finite and >= 0. Got {levy_rate}."
+            )
+
+        shift_sd = float(np.asarray(self.shift_mag).reshape(-1)[0])
+
+        if not np.isfinite(shift_sd) or shift_sd < 0.0:
+            raise ValueError(
+                f"shift_mag must be finite and >= 0. Got {shift_sd}."
+            )
+
+        n_shifts = int(self.rng.poisson(levy_rate))
+
+        if n_shifts > 0:
+            shift_times = self.rng.uniform(
+                low=-self.root,
+                high=0.0,
+                size=n_shifts
+            )
+            shift_times = np.sort(shift_times)
+
+            shift_magnitudes = self.rng.normal(
+                loc=0.0,
+                scale=shift_sd,
+                size=n_shifts
+            )
+
+            shift_indices = np.searchsorted(time_vec, shift_times, side="left")
+            shift_indices = np.clip(shift_indices, 1, len(envir) - 1)
+
+            # Multiple shifts can fall in the same discrete time step.
+            jumps_by_index = {}
+            for idx, mag in zip(shift_indices, shift_magnitudes):
+                jumps_by_index[idx] = jumps_by_index.get(idx, 0.0) + float(mag)
+
+        else:
+            shift_times = np.array([], dtype=float)
+            shift_magnitudes = np.array([], dtype=float)
+            shift_indices = np.array([], dtype=int)
+            jumps_by_index = {}
+
+        # Sequential BM with instantaneous jumps.
+        for i in range(1, len(envir)):
+            step = self.rng.normal(loc=self.mean, scale=self.sd)
+            envir[i] = envir[i - 1] + step
+
+            if i in jumps_by_index:
+                envir[i] += jumps_by_index[i]
+
+        self._last_levy_shifts = {
+            "n_shifts": n_shifts,
+            "levy_rate": levy_rate,
+            "shift_times": shift_times,
+            "shift_indices": shift_indices,
+            "shift_magnitudes": shift_magnitudes,
+        }

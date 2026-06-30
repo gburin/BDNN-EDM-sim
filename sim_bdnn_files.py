@@ -1208,15 +1208,15 @@ out_env_dep_lamb = plot_combined_diversification_figure(
 from analysis.parallel_simulations import *
 from analysis.export import *
 
-rnd_seed = int(np.random.choice(np.arange(1, 1e8), 1)[0])
-# rnd_seed = 42
+# rnd_seed = int(np.random.choice(np.arange(1, 1e8), 1)[0])
+rnd_seed = 42
 
 if __name__ == "__main__":
     sampled_values, failed_values = run_prior_simulations_parallel_with_hard_timeouts(
-        n_sims=1,
-        n_processes=1,
+        n_sims=10,
+        n_processes=10,
         scale_rate=3,
-        scale_effect=1,
+        scale_effect=3,
         output_dir="simulation_outputs",
         timeout_per_simulation=None,
         max_simulation_attempts=50,
@@ -1224,7 +1224,7 @@ if __name__ == "__main__":
 
         # your usual simulator settings here
         s_species=2,  # number of starting species
-        rangeSP=[10, 1000],  # min/max size data set
+        rangeSP=[10, 2000],  # min/max size data set
         minExtant_SP=0,  # minimum number of extant lineages
         root_r=[20., 60.],  # range root ages
         # rangeL=[0.2, 0.2],  # range of birth rates
@@ -1244,11 +1244,19 @@ if __name__ == "__main__":
         cat_traits_min_freq=[0.1],
         env_sim=True,
         env_sim_model="BM",
+        # SD of jump magnitudes:
+        # shift magnitude ~ Normal(0, env_sim_shift_mag)
+        env_sim_shift_mag=1.0,
+
+        # Prior on the Poisson rate:
+        # env_sim_levy_rate ~ Exponential(rate=scale_env_levy_rate)
+        scale_env_levy_rate=1.0,
+
         env_sim_trend_slope=0.001,
         env_sim_mean=0,
-        env_sim_sd=0.01,
+        env_sim_sd=0.1,
         env_sim_shift=[200, 350],
-        env_sim_shift_mag=20,
+
         env_effect_sp_per_state=[True, False],
         env_effect_ex_per_state=[False, False],
         # sp_env_file = "./temp_series.csv", # Path to environmental file influencing speciation
