@@ -532,18 +532,22 @@ class bdnn_simulator():
                     if self.divdep_sp_mode is not None:
                         n_states_div = len(cat_states[self.divdep_target_trait_idx])
 
-                        driver_sp, div_sp_active = self.get_diversity_driver_by_effect_matrix(
-                            focal_state,
-                            state_counts,
-                            self.div_effect_sp_per_state,
-                            inverse=False
+                        driver_sp, direction_sp, div_sp_active = (
+                            self.get_diversity_driver_by_effect_matrix(
+                                focal_state,
+                                state_counts,
+                                self.div_effect_sp_per_state,
+                                inverse=False
+                            )
                         )
 
-                        driver0_sp, div_sp_initial_active = self.get_initial_diversity_driver_by_effect_matrix(
-                            focal_state,
-                            self.div_effect_sp_per_state,
-                            n_states_div,
-                            inverse=False
+                        driver0_sp, direction0_sp, div_sp_initial_active = (
+                            self.get_initial_diversity_driver_by_effect_matrix(
+                                focal_state,
+                                self.div_effect_sp_per_state,
+                                n_states_div,
+                                inverse=False
+                            )
                         )
 
                         eff_sp_div = self.get_divdep_effect_by_state(
@@ -554,6 +558,8 @@ class bdnn_simulator():
 
                         if not div_sp_active:
                             eff_sp_div = 0.0
+                        else:
+                            eff_sp_div = abs(eff_sp_div) * direction_sp
 
                         l_j, div_mult_l_j = self.get_rate_by_diversity_transformation(
                             l_j,
@@ -566,42 +572,48 @@ class bdnn_simulator():
 
                         div_signal_sp = driver_sp
 
-                        if self.divdep_ex_mode is not None:
-                            n_states_div = len(cat_states[self.divdep_target_trait_idx])
+                    if self.divdep_ex_mode is not None:
+                        n_states_div = len(cat_states[self.divdep_target_trait_idx])
 
-                            driver_ex, div_ex_active = self.get_diversity_driver_by_effect_matrix(
+                        driver_ex, direction_ex, div_ex_active = (
+                            self.get_diversity_driver_by_effect_matrix(
                                 focal_state,
                                 state_counts,
                                 self.div_effect_ex_per_state,
                                 inverse=False
                             )
+                        )
 
-                            driver0_ex, div_ex_initial_active = self.get_initial_diversity_driver_by_effect_matrix(
+                        driver0_ex, direction0_ex, div_ex_initial_active = (
+                            self.get_initial_diversity_driver_by_effect_matrix(
                                 focal_state,
                                 self.div_effect_ex_per_state,
                                 n_states_div,
                                 inverse=False
                             )
+                        )
 
-                            eff_ex_div = self.get_divdep_effect_by_state(
-                                divdep_eff_ex,
-                                focal_state,
-                                self.divdep_effect_by_state_ex
-                            )
+                        eff_ex_div = self.get_divdep_effect_by_state(
+                            divdep_eff_ex,
+                            focal_state,
+                            self.divdep_effect_by_state_ex
+                        )
 
-                            if not div_ex_active:
-                                eff_ex_div = 0.0
+                        if not div_ex_active:
+                            eff_ex_div = 0.0
+                        else:
+                            eff_ex_div = abs(eff_ex_div) * direction_ex
 
-                            m_j, div_mult_m_j = self.get_rate_by_diversity_transformation(
-                                m_j,
-                                driver_ex,
-                                driver0_ex,
-                                eff_ex_div,
-                                model=self.divdep_ex_mode,
-                                logistic_inflection=self._divdep_logistic_inflection
-                            )
+                        m_j, div_mult_m_j = self.get_rate_by_diversity_transformation(
+                            m_j,
+                            driver_ex,
+                            driver0_ex,
+                            eff_ex_div,
+                            model=self.divdep_ex_mode,
+                            logistic_inflection=self._divdep_logistic_inflection
+                        )
 
-                            div_signal_ex = driver_ex
+                        div_signal_ex = driver_ex
 
                 # existing carrying-capacity dependence
                 if self.K_lam[0] is not None or self.fixed_K_lam[0] is not None:
@@ -623,8 +635,20 @@ class bdnn_simulator():
 
                 # speciation
                 if ran < l_j:
+
+                    # Stop immediately if this speciation event would exceed maxSP.
+                    # This prevents expensive trait/rate bookkeeping for species that
+                    # will be rejected anyway.
+                    if (
+                            self.timewindow_rangeSP is None
+                            and np.isfinite(self.maxSP)
+                            and len(te) >= self.maxSP
+                    ):
+                        exceeded_diversity = True
+                        break
+
                     num_sp_events_at_t += 1
-                    te.append(-0.0)  # add species
+                    te.append(-0.0)
                     ts.append(t)  # sp time
                     anc_desc.append(str(len(ts) - 1) + '_' +  str(j))
 
@@ -755,18 +779,22 @@ class bdnn_simulator():
                         if self.divdep_sp_mode is not None:
                             n_states_div = len(cat_states[self.divdep_target_trait_idx])
 
-                            driver_sp_new, div_sp_new_active = self.get_diversity_driver_by_effect_matrix(
-                                focal_state_new,
-                                state_counts,
-                                self.div_effect_sp_per_state,
-                                inverse=False
+                            driver_sp_new, direction_sp_new, div_sp_new_active = (
+                                self.get_diversity_driver_by_effect_matrix(
+                                    focal_state_new,
+                                    state_counts,
+                                    self.div_effect_sp_per_state,
+                                    inverse=False
+                                )
                             )
 
-                            driver0_sp_new, div_sp_new_initial_active = self.get_initial_diversity_driver_by_effect_matrix(
-                                focal_state_new,
-                                self.div_effect_sp_per_state,
-                                n_states_div,
-                                inverse=False
+                            driver0_sp_new, direction0_sp_new, div_sp_new_initial_active = (
+                                self.get_initial_diversity_driver_by_effect_matrix(
+                                    focal_state_new,
+                                    self.div_effect_sp_per_state,
+                                    n_states_div,
+                                    inverse=False
+                                )
                             )
 
                             eff_sp_div_new = self.get_divdep_effect_by_state(
@@ -777,6 +805,8 @@ class bdnn_simulator():
 
                             if not div_sp_new_active:
                                 eff_sp_div_new = 0.0
+                            else:
+                                eff_sp_div_new = abs(eff_sp_div_new) * direction_sp_new
 
                             l_new, div_mult_l_new = self.get_rate_by_diversity_transformation(
                                 l_new,
@@ -792,18 +822,22 @@ class bdnn_simulator():
                         if self.divdep_ex_mode is not None:
                             n_states_div = len(cat_states[self.divdep_target_trait_idx])
 
-                            driver_ex_new, div_ex_new_active = self.get_diversity_driver_by_effect_matrix(
-                                focal_state_new,
-                                state_counts,
-                                self.div_effect_ex_per_state,
-                                inverse=False
+                            driver_ex_new, direction_ex_new, div_ex_new_active = (
+                                self.get_diversity_driver_by_effect_matrix(
+                                    focal_state_new,
+                                    state_counts,
+                                    self.div_effect_ex_per_state,
+                                    inverse=False
+                                )
                             )
 
-                            driver0_ex_new, div_ex_new_initial_active = self.get_initial_diversity_driver_by_effect_matrix(
-                                focal_state_new,
-                                self.div_effect_ex_per_state,
-                                n_states_div,
-                                inverse=False
+                            driver0_ex_new, direction0_ex_new, div_ex_new_initial_active = (
+                                self.get_initial_diversity_driver_by_effect_matrix(
+                                    focal_state_new,
+                                    self.div_effect_ex_per_state,
+                                    n_states_div,
+                                    inverse=False
+                                )
                             )
 
                             eff_ex_div_new = self.get_divdep_effect_by_state(
@@ -814,6 +848,8 @@ class bdnn_simulator():
 
                             if not div_ex_new_active:
                                 eff_ex_div_new = 0.0
+                            else:
+                                eff_ex_div_new = abs(eff_ex_div_new) * direction_ex_new
 
                             m_new, div_mult_m_new = self.get_rate_by_diversity_transformation(
                                 m_new,
@@ -911,6 +947,9 @@ class bdnn_simulator():
                 lineage_rates_through_time[t_abs, 4, j] = focal_state
                 lineage_rates_through_time[t_abs, 5, j] = env_sp_value
                 lineage_rates_through_time[t_abs, 6, j] = env_ex_value
+
+            if exceeded_diversity:
+                break
 
             if t != -1:
                 lineage_weighted_lambda_tt[t_abs-1] = self.get_harmonic_mean(lineage_lambda)
@@ -2510,7 +2549,8 @@ class bdnn_simulator():
             min_diversity=1.0
     ):
         """
-        Compute the signed diversity driver affecting a focal state.
+        Compute the unsigned source-diversity driver and the signed direction
+        affecting one focal state.
 
         effect_matrix convention:
 
@@ -2532,29 +2572,45 @@ class bdnn_simulator():
 
         means:
 
-            diversity of state 0 negatively affects rates of state 1.
+            diversity of source state 0 negatively affects rates of focal state 1.
+
+        Returns
+        -------
+        driver : float
+            Positive source-diversity signal. For the example above, this is N_state_0.
+
+        direction : float
+            Direction of the effect: -1, 0, or 1.
+
+        active : bool
+            Whether any source diversity affects the focal state.
         """
         focal_state = int(focal_state)
         state_counts = np.asarray(state_counts, dtype=float)
 
+        counts = state_counts.copy()
+        counts[~np.isfinite(counts)] = min_diversity
+        counts[counts < min_diversity] = min_diversity
+
+        if inverse:
+            features = np.divide(
+                1.0,
+                counts,
+                out=np.zeros_like(counts, dtype=float),
+                where=counts > 0.0
+            )
+        else:
+            features = counts
+
+        n_states = len(features)
+
         if effect_matrix is None:
-            # Backward-compatible default: self-diversity, positive effect.
-            counts = np.asarray(state_counts, dtype=float).copy()
-
-            counts[~np.isfinite(counts)] = min_diversity
-            counts[counts < min_diversity] = min_diversity
-
-            if inverse:
-                features = np.divide(
-                    1.0,
-                    counts,
-                    out=np.zeros_like(counts, dtype=float),
-                    where=counts > 0.0
+            if focal_state < 0 or focal_state >= n_states:
+                raise IndexError(
+                    f"focal_state={focal_state} outside {n_states} states."
                 )
-            else:
-                features = counts
 
-            return float(features[focal_state]), True
+            return float(features[focal_state]), 1.0, True
 
         effect_matrix = np.asarray(effect_matrix, dtype=float)
 
@@ -2563,8 +2619,6 @@ class bdnn_simulator():
                 "div_effect_sp_per_state and div_effect_ex_per_state must be "
                 "2D matrices with rows=source states and columns=focal states."
             )
-
-        n_states = len(state_counts)
 
         if effect_matrix.shape != (n_states, n_states):
             raise ValueError(
@@ -2585,26 +2639,27 @@ class bdnn_simulator():
                 f"{effect_matrix.shape}."
             )
 
-        counts = state_counts.copy()
-        counts[counts < min_diversity] = min_diversity
-
-        if inverse:
-            features = 1.0 / counts
-        else:
-            features = counts
-
-        # Column = focal state. Entries in this column tell us which
-        # source-state diversities affect this focal state and with what sign.
         directions = effect_matrix[:, focal_state]
 
-        active = np.any(directions != 0.0)
+        active_sources = directions != 0.0
 
-        if not active:
-            return 0.0, False
+        if not np.any(active_sources):
+            return 0.0, 0.0, False
 
-        driver = np.sum(directions * features)
+        active_directions = directions[active_sources]
 
-        return float(driver), True
+        if np.any(active_directions > 0.0) and np.any(active_directions < 0.0):
+            raise ValueError(
+                "A single focal state currently cannot mix positive and negative "
+                "source effects in the same diversity-effect column. Use either "
+                "all positive, all negative, or zero entries for each focal state."
+            )
+
+        direction = float(np.sign(np.sum(active_directions)))
+
+        driver = float(np.sum(features[active_sources]))
+
+        return driver, direction, True
 
     def get_initial_diversity_driver_by_effect_matrix(
             self,
@@ -2614,7 +2669,7 @@ class bdnn_simulator():
             inverse=False
     ):
         """
-        Initial signed diversity driver for a focal state, assuming one
+        Initial source-diversity driver for a focal state, assuming one
         starting lineage in each state.
         """
         init_counts = np.ones(n_states, dtype=float)
