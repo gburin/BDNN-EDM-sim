@@ -114,7 +114,12 @@ class bdnn_simulator():
                  divdep_state_matrix_sp=None,
                  divdep_state_matrix_ex=None,
                  divdep_normalize=True,
+                 divdep_logistic_inflection=None,
+                 divdep_logistic_steepness=1.0,
                  divdep_scale_reference="total_extant",  # "total_extant", "max_state", "none"
+                 divdep_min_source_species=0.0,
+                 divdep_saturating_steepness=0.1,
+                 divdep_rate_floor=0.05,
                  # Per-state multipliers for the environmental effect, using the first categorical trait
                  # These are LOOKUP values only: the numeric state labels themselves carry no meaning.
                  # Example for 3 states:
@@ -218,6 +223,11 @@ class bdnn_simulator():
         self.divdep_state_matrix_ex = divdep_state_matrix_ex
         self.divdep_normalize = divdep_normalize
         self.divdep_scale_reference = divdep_scale_reference
+        self.divdep_min_source_species = divdep_min_source_species
+        self.divdep_logistic_inflection_input = divdep_logistic_inflection
+        self.divdep_logistic_steepness = divdep_logistic_steepness
+        self.divdep_saturating_steepness = divdep_saturating_steepness
+        self.divdep_rate_floor = divdep_rate_floor
         self.env_sim = env_sim
         self.env_sim_model = env_sim_model
         self.env_sim_mean = env_sim_mean
@@ -567,7 +577,10 @@ class bdnn_simulator():
                             driver0_sp,
                             eff_sp_div,
                             model=self.divdep_sp_mode,
-                            logistic_inflection=self._divdep_logistic_inflection
+                            logistic_inflection=self._divdep_logistic_inflection,
+                            logistic_steepness=self.divdep_logistic_steepness,
+                            saturating_steepness=self.divdep_saturating_steepness,
+                            rate_floor=self.divdep_rate_floor
                         )
 
                         div_signal_sp = driver_sp
@@ -610,7 +623,10 @@ class bdnn_simulator():
                             driver0_ex,
                             eff_ex_div,
                             model=self.divdep_ex_mode,
-                            logistic_inflection=self._divdep_logistic_inflection
+                            logistic_inflection=self._divdep_logistic_inflection,
+                            logistic_steepness=self.divdep_logistic_steepness,
+                            saturating_steepness=self.divdep_saturating_steepness,
+                            rate_floor=self.divdep_rate_floor
                         )
 
                         div_signal_ex = driver_ex
@@ -814,7 +830,10 @@ class bdnn_simulator():
                                 driver0_sp_new,
                                 eff_sp_div_new,
                                 model=self.divdep_sp_mode,
-                                logistic_inflection=self._divdep_logistic_inflection
+                                logistic_inflection=self._divdep_logistic_inflection,
+                                logistic_steepness=self.divdep_logistic_steepness,
+                                saturating_steepness=self.divdep_saturating_steepness,
+                                rate_floor=self.divdep_rate_floor
                             )
 
                             div_signal_sp_new = driver_sp_new
@@ -857,7 +876,10 @@ class bdnn_simulator():
                                 driver0_ex_new,
                                 eff_ex_div_new,
                                 model=self.divdep_ex_mode,
-                                logistic_inflection=self._divdep_logistic_inflection
+                                logistic_inflection=self._divdep_logistic_inflection,
+                                logistic_steepness=self.divdep_logistic_steepness,
+                                saturating_steepness=self.divdep_saturating_steepness,
+                                rate_floor=self.divdep_rate_floor
                             )
 
                             div_signal_ex_new = driver_ex_new
@@ -1028,8 +1050,19 @@ class bdnn_simulator():
 
         self._expected_total_diversity = expected_total_diversity
 
-        if np.isfinite(expected_total_diversity) and expected_total_diversity > 0.0:
+        if self.divdep_logistic_inflection_input is not None:
+            logistic_inflection = float(
+                np.asarray(self.divdep_logistic_inflection_input).reshape(-1)[0]
+            )
+
+            if not np.isfinite(logistic_inflection):
+                logistic_inflection = np.nan
+
+            self._divdep_logistic_inflection = logistic_inflection
+
+        elif np.isfinite(expected_total_diversity) and expected_total_diversity > 0.0:
             self._divdep_logistic_inflection = 0.5 * expected_total_diversity
+
         else:
             self._divdep_logistic_inflection = np.nan
 
@@ -1364,31 +1397,58 @@ class bdnn_simulator():
             driver0,
             div_eff,
             model="linear",
-            logistic_inflection=None
+            logistic_inflection=None,
+            logistic_steepness=None,
+            saturating_steepness=None,
+            rate_floor=None
     ):
         """
-        Modify a rate according to a directional diversity effect.
+        Modify a rate according to diversity.
+
+        Models
+        ------
+        linear:
+            multiplier = 1 + div_eff * diversity_change
+
+        exponential:
+            multiplier = exp(div_eff * diversity_change)
+
+        logistic:
+            bounded sigmoid response.
+
+        saturating_exponential:
+            Negative effect:
+                multiplier declines as a negative exponential toward a positive floor.
+
+            Positive effect:
+                multiplier increases as a saturating exponential toward
+                1 + abs(div_eff).
 
         div_eff is signed before this function is called:
 
             div_eff = abs(sampled_effect) * direction
 
-        where direction is one of:
+        where direction is:
 
-            -1 = negative effect
+            -1 = negative diversity effect
              0 = no effect
-             1 = positive effect
-
-        For the logistic model, the inflection point can be supplied using
-        logistic_inflection. This should usually be half of the expected total
-        diversity under the sampled birth-death rates.
+             1 = positive diversity effect
         """
+        r = float(r)
         div_eff = float(np.asarray(div_eff).reshape(-1)[0])
         driver_current = float(driver_current)
         driver0 = float(driver0)
 
         if model is None or np.isclose(div_eff, 0.0):
-            return float(r), 1.0
+            return r, 1.0
+
+        if not np.isfinite(r):
+            return r, 1.0
+
+        if not np.isfinite(driver_current) or not np.isfinite(driver0):
+            return r, 1.0
+
+        model = str(model).lower()
 
         delta = driver_current - driver0
 
@@ -1397,7 +1457,8 @@ class bdnn_simulator():
             multiplier = max(multiplier, 0.0)
 
         elif model == "exponential":
-            multiplier = np.exp(div_eff * delta)
+            x = np.clip(div_eff * delta, -700, 700)
+            multiplier = np.exp(x)
 
         elif model == "logistic":
             if logistic_inflection is None or not np.isfinite(logistic_inflection):
@@ -1405,24 +1466,107 @@ class bdnn_simulator():
 
             logistic_inflection = float(logistic_inflection)
 
-            # Stable logistic transform.
-            # Positive div_eff: increasing diversity increases the rate.
-            # Negative div_eff: increasing diversity decreases the rate.
-            x = div_eff * (driver_current - logistic_inflection)
-            x0 = div_eff * (driver0 - logistic_inflection)
+            if logistic_steepness is None:
+                logistic_steepness = getattr(
+                    self,
+                    "divdep_logistic_steepness",
+                    1.0
+                )
+
+            logistic_steepness = float(
+                np.asarray(logistic_steepness).reshape(-1)[0]
+            )
+
+            if not np.isfinite(logistic_steepness) or logistic_steepness <= 0.0:
+                logistic_steepness = 1.0
+
+            x = logistic_steepness * (driver_current - logistic_inflection)
+            x0 = logistic_steepness * (driver0 - logistic_inflection)
 
             x = np.clip(x, -700, 700)
             x0 = np.clip(x0, -700, 700)
 
-            raw = 1.0 / (1.0 + np.exp(-x))
-            raw0 = 1.0 / (1.0 + np.exp(-x0))
+            sigmoid = 1.0 / (1.0 + np.exp(-x))
+            sigmoid0 = 1.0 / (1.0 + np.exp(-x0))
 
-            multiplier = raw / raw0 if raw0 > 0.0 else 1.0
+            if driver_current >= driver0:
+                denom = 1.0 - sigmoid0
+                if not np.isfinite(denom) or denom <= 1e-12:
+                    scaled_change = 0.0
+                else:
+                    scaled_change = (sigmoid - sigmoid0) / denom
+            else:
+                denom = sigmoid0
+                if not np.isfinite(denom) or denom <= 1e-12:
+                    scaled_change = 0.0
+                else:
+                    scaled_change = (sigmoid - sigmoid0) / denom
+
+            scaled_change = float(np.clip(scaled_change, -1.0, 1.0))
+
+            multiplier = 1.0 + div_eff * scaled_change
+            multiplier = max(multiplier, 0.0)
+
+        elif model in ["saturating_exponential", "saturating", "neg_exp"]:
+            # ------------------------------------------------------------
+            # Saturating exponential diversity response.
+            #
+            # For negative effects, the multiplier declines from 1 toward
+            # a positive floor. This prevents rates from collapsing to zero.
+            #
+            # For positive effects, the multiplier increases from 1 toward
+            # 1 + abs(div_eff).
+            # ------------------------------------------------------------
+
+            if saturating_steepness is None:
+                saturating_steepness = getattr(
+                    self,
+                    "divdep_saturating_steepness",
+                    0.1
+                )
+
+            saturating_steepness = float(
+                np.asarray(saturating_steepness).reshape(-1)[0]
+            )
+
+            if not np.isfinite(saturating_steepness) or saturating_steepness <= 0.0:
+                saturating_steepness = 0.1
+
+            if rate_floor is None:
+                rate_floor = getattr(self, "divdep_rate_floor", 0.05)
+
+            rate_floor = float(np.asarray(rate_floor).reshape(-1)[0])
+
+            if not np.isfinite(rate_floor):
+                rate_floor = 0.05
+
+            rate_floor = float(np.clip(rate_floor, 0.0, 1.0))
+
+            # Use only diversity increase relative to the starting driver.
+            # If diversity drops below driver0, the diversity effect disappears.
+            d = max(delta, 0.0)
+
+            saturation = 1.0 - np.exp(-saturating_steepness * d)
+
+            if div_eff < 0.0:
+                # Maximum possible proportional decrease.
+                # The effect magnitude can make the decline stronger, but the
+                # rate_floor prevents the multiplier from reaching zero.
+                max_decrease = min(abs(div_eff), 1.0 - rate_floor)
+
+                multiplier = 1.0 - max_decrease * saturation
+                multiplier = max(multiplier, rate_floor)
+
+            else:
+                # Positive effect: saturates toward 1 + abs(div_eff).
+                max_increase = abs(div_eff)
+                multiplier = 1.0 + max_increase * saturation
 
         else:
             raise ValueError(
                 f"Unknown diversity-dependence model '{model}'. "
-                "Choose from None, 'linear', 'exponential', or 'logistic'."
+                "Choose from None, 'linear', 'exponential', 'logistic', "
+                "or 'saturating_exponential'."
             )
 
         if not np.isfinite(multiplier):
@@ -2399,6 +2543,12 @@ class bdnn_simulator():
                   'divdep_ex_mode': self.divdep_ex_mode,
                   'divdep_state_matrix_sp': self.divdep_state_matrix_sp,
                   'divdep_state_matrix_ex': self.divdep_state_matrix_ex,
+                  'divdep_min_source_species': self.divdep_min_source_species,
+                  'divdep_logistic_inflection_input': self.divdep_logistic_inflection_input,
+                  'divdep_logistic_inflection': self._divdep_logistic_inflection,
+                  'divdep_logistic_steepness': self.divdep_logistic_steepness,
+                  'divdep_saturating_steepness': self.divdep_saturating_steepness,
+                  'divdep_rate_floor': self.divdep_rate_floor,
 
                   'lineage_rates_through_time': lineage_rates_through_time,
                   'lineage_rates_through_time_columns': [
@@ -2549,7 +2699,7 @@ class bdnn_simulator():
             min_diversity=1.0
     ):
         """
-        Compute the unsigned source-diversity driver and the signed direction
+        Compute the thresholded source-diversity driver and the signed direction
         affecting one focal state.
 
         effect_matrix convention:
@@ -2563,46 +2713,31 @@ class bdnn_simulator():
              0 = no effect
              1 = source-state diversity positively affects focal-state rate
 
-        Example:
+        The source-diversity threshold is controlled by:
 
-            np.array([
-                [0, -1],
-                [0,  0]
-            ])
+            self.divdep_min_source_species
 
-        means:
+        The driver entering the diversity-effect function is:
 
-            diversity of source state 0 negatively affects rates of focal state 1.
+            max(source_diversity - divdep_min_source_species, 0)
 
-        Returns
-        -------
-        driver : float
-            Positive source-diversity signal. For the example above, this is N_state_0.
-
-        direction : float
-            Direction of the effect: -1, 0, or 1.
-
-        active : bool
-            Whether any source diversity affects the focal state.
+        Therefore, if divdep_min_source_species = 20, the diversity effect is
+        inactive while the relevant source diversity is <= 20.
         """
         focal_state = int(focal_state)
         state_counts = np.asarray(state_counts, dtype=float)
 
         counts = state_counts.copy()
-        counts[~np.isfinite(counts)] = min_diversity
-        counts[counts < min_diversity] = min_diversity
+        counts[~np.isfinite(counts)] = 0.0
+        counts[counts < 0.0] = 0.0
 
-        if inverse:
-            features = np.divide(
-                1.0,
-                counts,
-                out=np.zeros_like(counts, dtype=float),
-                where=counts > 0.0
-            )
-        else:
-            features = counts
+        threshold = getattr(self, "divdep_min_source_species", 0.0)
+        threshold = float(np.asarray(threshold).reshape(-1)[0])
 
-        n_states = len(features)
+        if not np.isfinite(threshold) or threshold < 0.0:
+            threshold = 0.0
+
+        n_states = len(counts)
 
         if effect_matrix is None:
             if focal_state < 0 or focal_state >= n_states:
@@ -2610,7 +2745,24 @@ class bdnn_simulator():
                     f"focal_state={focal_state} outside {n_states} states."
                 )
 
-            return float(features[focal_state]), 1.0, True
+            raw_source_diversity = float(counts[focal_state])
+
+            thresholded_source_diversity = max(
+                raw_source_diversity - threshold,
+                0.0
+            )
+
+            if inverse:
+                if thresholded_source_diversity <= 0.0:
+                    return 0.0, 0.0, False
+
+                driver = 1.0 / max(thresholded_source_diversity, min_diversity)
+            else:
+                driver = thresholded_source_diversity
+
+            active = driver > 0.0
+
+            return float(driver), 1.0, active
 
         effect_matrix = np.asarray(effect_matrix, dtype=float)
 
@@ -2640,7 +2792,6 @@ class bdnn_simulator():
             )
 
         directions = effect_matrix[:, focal_state]
-
         active_sources = directions != 0.0
 
         if not np.any(active_sources):
@@ -2657,9 +2808,22 @@ class bdnn_simulator():
 
         direction = float(np.sign(np.sum(active_directions)))
 
-        driver = float(np.sum(features[active_sources]))
+        raw_source_diversity = float(np.sum(counts[active_sources]))
 
-        return driver, direction, True
+        thresholded_source_diversity = max(
+            raw_source_diversity - threshold,
+            0.0
+        )
+
+        if thresholded_source_diversity <= 0.0:
+            return 0.0, 0.0, False
+
+        if inverse:
+            driver = 1.0 / max(thresholded_source_diversity, min_diversity)
+        else:
+            driver = thresholded_source_diversity
+
+        return float(driver), direction, True
 
     def get_initial_diversity_driver_by_effect_matrix(
             self,
@@ -2671,6 +2835,10 @@ class bdnn_simulator():
         """
         Initial source-diversity driver for a focal state, assuming one
         starting lineage in each state.
+
+        The same source-diversity threshold is applied here. Therefore, if
+        divdep_min_source_species is larger than the initial source diversity,
+        the initial driver is zero.
         """
         init_counts = np.ones(n_states, dtype=float)
 
